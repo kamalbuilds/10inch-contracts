@@ -1,0 +1,31 @@
+{
+  "network": "testnet",
+  "version": "fixed-v1.1",
+  "contracts": {
+    "fusion_plus_fixed": {
+      "address": "CB6OM3A2E3IUXYHFJ5CU4JD6JGUQV4N2JDSCIUGZRBOHTHG43ULMPDBI",
+      "wasm_hash": "12e93bd5e5787cf6370e0f87201c5265f06fc3fd80c0561423bef60addb66482",
+      "deploy_tx": "ba8191f94794cd8b044cad1b86e7bd65da8d7b16e6f12c5c9113ac2876298f70",
+      "explorer_url": "https://stellar.expert/explorer/testnet/contract/CB6OM3A2E3IUXYHFJ5CU4JD6JGUQV4N2JDSCIUGZRBOHTHG43ULMPDBI",
+      "tx_url": "https://stellar.expert/explorer/testnet/tx/ba8191f94794cd8b044cad1b86e7bd65da8d7b16e6f12c5c9113ac2876298f70",
+      "fixes": [
+        "Fixed Vec<u64> initialization in RelayerOrder",
+        "Corrected create_order function implementation",
+        "Resolved UnreachableCodeReached errors",
+        "Cleaned up unused imports"
+      ]
+    }
+  },
+  "previous_contract": {
+    "address": "CC6W62TTBE7Y46DK53X6BB5INBKYYTPQ3WL5DGHA2IVNYEOXELAITO52",
+    "status": "deprecated - had Vec initialization issues"
+  },
+  "deployer": {
+    "address": "GAD5WVZJM3LQDORES47DEDS4DS5GFE4AWBXWFQ6DBLZT5YMMZKHXZKXM",
+    "alias": "deployer"
+  },
+  "ethereum_sepolia": {
+    "htlc_contract": "0x067423CA883d8D54995735aDc1FA23c17e5b62cc"
+  },
+  "deployment_time": "2024-08-03T05:35:37Z"
+}

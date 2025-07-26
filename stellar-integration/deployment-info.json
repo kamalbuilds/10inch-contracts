@@ -1,0 +1,20 @@
+{
+  "network": "testnet",
+  "contracts": {
+    "fusion_plus": {
+      "address": "CC6W62TTBE7Y46DK53X6BB5INBKYYTPQ3WL5DGHA2IVNYEOXELAITO52",
+      "wasm_hash": "12e93bd5e5787cf6370e0f87201c5265f06fc3fd80c0561423bef60addb66482",
+      "deploy_tx": "022d1b8bd450fbedddf4717087bc40061faddc2ada2fbeb34b98da056c67b539",
+      "explorer_url": "https://stellar.expert/explorer/testnet/contract/CC6W62TTBE7Y46DK53X6BB5INBKYYTPQ3WL5DGHA2IVNYEOXELAITO52",
+      "tx_url": "https://stellar.expert/explorer/testnet/tx/022d1b8bd450fbedddf4717087bc40061faddc2ada2fbeb34b98da056c67b539"
+    }
+  },
+  "deployer": {
+    "address": "GAD5WVZJM3LQDORES47DEDS4DS5GFE4AWBXWFQ6DBLZT5YMMZKHXZKXM",
+    "alias": "deployer"
+  },
+  "ethereum_sepolia": {
+    "htlc_contract": "0x067423CA883d8D54995735aDc1FA23c17e5b62cc"
+  },
+  "deployment_time": "2024-08-03T02:33:00Z"
+}

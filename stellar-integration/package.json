@@ -1,0 +1,75 @@
+{
+  "name": "@1inch/fusion-plus-stellar",
+  "version": "1.0.0",
+  "description": "1inch Fusion+ Cross-Chain Atomic Swaps for Stellar",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "build:contracts": "soroban contract build",
+    "test": "jest",
+    "test:contracts": "soroban contract test",
+    "test:integration": "jest --testPathPattern=integration",
+    "deploy:testnet": "soroban contract deploy --network testnet",
+    "deploy:mainnet": "soroban contract deploy --network mainnet",
+    "lint": "eslint src/**/*.ts",
+    "lint:fix": "eslint src/**/*.ts --fix",
+    "format": "prettier --write \"src/**/*.ts\"",
+    "clean": "rm -rf dist build target",
+    "dev": "ts-node src/examples/demo.ts"
+  },
+  "keywords": [
+    "1inch",
+    "fusion-plus",
+    "atomic-swaps",
+    "stellar",
+    "soroban",
+    "cross-chain",
+    "defi",
+    "htlc"
+  ],
+  "author": "1inch Network",
+  "license": "MIT",
+  "dependencies": {
+    "@stellar/freighter-api": "^1.7.1",
+    "@stellar/stellar-sdk": "^13.3.0",
+    "axios": "^1.11.0",
+    "bignumber.js": "^9.1.2",
+    "buffer": "^6.0.3",
+    "crypto": "^1.0.1",
+    "ethers": "^6.15.0"
+  },
+  "devDependencies": {
+    "@types/jest": "^29.5.0",
+    "@types/node": "^20.8.0",
+    "@typescript-eslint/eslint-plugin": "^6.8.0",
+    "@typescript-eslint/parser": "^6.8.0",
+    "eslint": "^8.51.0",
+    "jest": "^29.7.0",
+    "prettier": "^3.0.0",
+    "ts-jest": "^29.1.0",
+    "ts-node": "^10.9.0",
+    "typescript": "^5.2.0"
+  },
+  "files": [
+    "dist/**/*",
+    "contracts/**/*",
+    "README.md",
+    "LICENSE"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/1inch/fusion-plus.git",
+    "directory": "stellar-integration"
+  },
+  "bugs": {
+    "url": "https://github.com/1inch/fusion-plus/issues"
+  },
+  "homepage": "https://github.com/1inch/fusion-plus/tree/main/stellar-integration#readme",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

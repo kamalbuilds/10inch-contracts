@@ -1,0 +1,14 @@
+{
+  "name": "token-registry",
+  "version": "1.0.0",
+  "description": "Token registry for multi-chain support",
+  "main": "src/TokenRegistry.ts",
+  "types": "src/TokenRegistry.ts",
+  "scripts": {
+    "build": "tsc"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "typescript": "^5.3.3"
+  }
+}

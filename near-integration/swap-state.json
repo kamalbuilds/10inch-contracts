@@ -1,0 +1,13 @@
+{
+  "secret": "85ce8d958b255a8eaf36d3e43e491f06381878737910ca39dbddd6d1e49c4935",
+  "nearHashlock": "35fb8fb336f344031a7cb243f7e197531d0d811c6fd66732431b88dd2a29180d",
+  "ethHashlock": "06c4569992bcdecd08618c8149ccabeb68c5c4a37fb7f8756bfd3633cf160f29",
+  "nearHtlcId": "htlc_3",
+  "nearTxHash": "H2UeoHMMGzpiwr89XaTgXWGDY5cSxi3s69zm2MBNW4gB",
+  "userEthAddress": "0x742d35cc6634c0532925a3b844bc9e7595f6e789",
+  "resolverNearAddress": "fusion-htlc-demo.testnet",
+  "phase": "htlcs_created",
+  "timelock": 1754151798,
+  "ethContractId": "0xfd8828dd135506719800f87d3ba3777892ba199ab0a7ea13d178c4cb182f205a",
+  "ethTxHash": "0xe8b500cbac162b5d85505d3b8ee4212bb59efe3688a66a6296be6178fd4b9cc0"
+}

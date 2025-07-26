@@ -34,6 +34,7 @@ Network: Stellar Testnet
 Status: OPERATIONAL
 WASM Size: 19,881 bytes (optimized)
 
+[![Fusion + Demo of cross-chain atomic swap process](https://img.youtube.com/vi/knRKtew2f0U/maxresdefault.jpg)](https://www.youtube.com/watch?v=knRKtew2f0U)
 
 
 - Ton Blockchain 

@@ -1,0 +1,53 @@
+{
+  "name": "near-fusion-integration",
+  "version": "1.0.0",
+  "description": "1inch Fusion+ integration for NEAR Protocol",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "cargo build --target wasm32-unknown-unknown --release && tsc",
+    "build:contract": "cargo build --target wasm32-unknown-unknown --release",
+    "build:ts": "tsc",
+    "test": "cargo test && jest",
+    "test:contract": "cargo test",
+    "test:integration": "jest",
+    "deploy:testnet": "ts-node scripts/deploy.ts",
+    "demo": "ts-node scripts/demo.ts",
+    "relayer": "ts-node scripts/run-relayer.ts",
+    "resolver": "ts-node scripts/run-resolver.ts"
+  },
+  "dependencies": {
+    "axios": "^1.6.0",
+    "cors": "^2.8.5",
+    "dotenv": "^16.3.1",
+    "ethers": "^6.9.0",
+    "express": "^4.18.2",
+    "js-sha256": "^0.11.1",
+    "near-api-js": "^6.2.4"
+  },
+  "devDependencies": {
+    "@types/bn.js": "^5.2.0",
+    "@types/cors": "^2.8.17",
+    "@types/express": "^4.17.21",
+    "@types/jest": "^29.5.0",
+    "@types/node": "^20.10.0",
+    "jest": "^29.7.0",
+    "near-workspaces": "^5.0.0",
+    "ts-jest": "^29.1.0",
+    "ts-node": "^10.9.1",
+    "typescript": "^5.3.0"
+  },
+  "jest": {
+    "preset": "ts-jest",
+    "testEnvironment": "node",
+    "testMatch": [
+      "**/*.test.ts"
+    ],
+    "moduleFileExtensions": [
+      "ts",
+      "js"
+    ],
+    "transform": {
+      "^.+\\.ts$": "ts-jest"
+    }
+  }
+}

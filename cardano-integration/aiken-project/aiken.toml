@@ -1,0 +1,7 @@
+name = "1inch/fusion_htlc"
+version = "0.1.0"
+compiler = "v1.1.19"
+
+dependencies = [
+  { name = "aiken-lang/stdlib", version = "main", source = "github" }
+]

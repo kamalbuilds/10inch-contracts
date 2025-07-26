@@ -1,0 +1,36 @@
+{
+  "name": "cardano-integration",
+  "version": "1.0.0",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "test": "jest",
+    "dev": "ts-node",
+    "deploy:testnet": "ts-node scripts/deploy-testnet.ts",
+    "test:crosschain": "ts-node scripts/test-cross-chain.ts"
+  },
+  "keywords": [
+    "cardano",
+    "htlc",
+    "atomic-swap",
+    "1inch"
+  ],
+  "author": "1inch",
+  "license": "MIT",
+  "description": "Cardano integration for 1inch Fusion Plus cross-chain swaps",
+  "dependencies": {
+    "@lucid-evolution/lucid": "^0.4.29",
+    "@lucid-evolution/provider": "^0.1.90",
+    "dotenv": "^17.2.1",
+    "ethers": "^6.15.0"
+  },
+  "devDependencies": {
+    "@types/jest": "^30.0.0",
+    "@types/node": "^24.1.0",
+    "jest": "^29.7.0",
+    "ts-jest": "^29.4.0",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.9.2"
+  }
+}

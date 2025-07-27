@@ -26,7 +26,7 @@ async function startRelayer() {
     // Configure relayer
     const config = {
         xrpRpcUrl: process.env.XRP_RPC_URL || 'wss://s.altnet.rippletest.net:51233',
-        evmRpcUrl: process.env.EVM_RPC_URL || 'https://eth-sepolia.g.alchemy.com/v2/EQg9SpbyMVLhZ7QmhA7bJ_U_z9QIIeTQ',
+        evmRpcUrl: process.env.EVM_RPC_URL || 'https://eth-sepolia.public.blastapi.io',
         evmHTLCAddress: sharedDeployment.sepolia.contractAddress,
         evmHTLCABI: sharedDeployment.sepolia.abi,
         xrpSeed,

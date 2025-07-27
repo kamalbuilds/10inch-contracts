@@ -15,7 +15,7 @@ async function testDirectTx() {
     
     try {
         // Configuration
-        const evmRpcUrl = 'https://eth-sepolia.g.alchemy.com/v2/EQg9SpbyMVLhZ7QmhA7bJ_U_z9QIIeTQ';
+        const evmRpcUrl = 'https://eth-sepolia.public.blastapi.io';
         const evmPrivateKey = process.env.EVM_PRIVATE_KEY || '';
         const evmHTLCAddress = sharedDeployment.sepolia.contractAddress;
         const evmHTLCABI = sharedDeployment.sepolia.abi;

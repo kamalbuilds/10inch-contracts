@@ -38,7 +38,7 @@ async function testCrossChainSwap() {
             tonMnemonic: process.env.TON_MNEMONIC || '',
             
             // EVM Configuration (Sepolia)
-            evmRpcUrl: process.env.EVM_RPC_URL || 'https://eth-sepolia.g.alchemy.com/v2/EQg9SpbyMVLhZ7QmhA7bJ_U_z9QIIeTQ',
+            evmRpcUrl: process.env.EVM_RPC_URL || 'https://eth-sepolia.public.blastapi.io',
             evmHTLCAddress: sharedDeployment.sepolia.contractAddress,
             evmPrivateKey: process.env.EVM_PRIVATE_KEY || '',
             evmHTLCABI: sharedDeployment.sepolia.abi,

@@ -1,0 +1,13 @@
+{
+  "network": "testnet",
+  "deployer": "0xe6849c6dace05e958c43ac88c28f26f16c1ee9426d1233ba13e555bb1f953c97",
+  "packageId": "0x0e486741e8ea783f433f3093659fc3dfc05bcee1726cfe7bc5a7718ff82436ad",
+  "modules": {
+    "fusion_htlc_v2": "0x0e486741e8ea783f433f3093659fc3dfc05bcee1726cfe7bc5a7718ff82436ad::fusion_htlc_v2",
+    "fusion_cross_chain": "0x0e486741e8ea783f433f3093659fc3dfc05bcee1726cfe7bc5a7718ff82436ad::fusion_cross_chain"
+  },
+  "objects": {
+    "swapRegistry": "0x8f1443ba4ae1b759d60938ecaa9ff42d1bcf9f0f6ba0af7f9269754b224fcaba"
+  },
+  "timestamp": "2025-07-26T18:37:08.572Z"
+}

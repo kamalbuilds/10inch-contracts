@@ -1,0 +1,63 @@
+{
+  "abi": [
+    {
+      "inputs": [
+        {
+          "internalType": "uint256",
+          "name": "srcChainId",
+          "type": "uint256"
+        },
+        {
+          "internalType": "address",
+          "name": "dstAddress",
+          "type": "address"
+        },
+        {
+          "internalType": "uint256",
+          "name": "srcSafetyDeposit",
+          "type": "uint256"
+        },
+        {
+          "internalType": "uint256",
+          "name": "dstSafetyDeposit",
+          "type": "uint256"
+        },
+        {
+          "internalType": "uint256",
+          "name": "dstChainId",
+          "type": "uint256"
+        },
+        {
+          "internalType": "bytes32",
+          "name": "hashlock",
+          "type": "bytes32"
+        },
+        {
+          "internalType": "uint256",
+          "name": "timelock",
+          "type": "uint256"
+        },
+        {
+          "internalType": "address",
+          "name": "token",
+          "type": "address"
+        },
+        {
+          "internalType": "uint256",
+          "name": "amount",
+          "type": "uint256"
+        }
+      ],
+      "name": "createEscrow",
+      "outputs": [
+        {
+          "internalType": "address",
+          "name": "",
+          "type": "address"
+        }
+      ],
+      "stateMutability": "payable",
+      "type": "function"
+    }
+  ]
+}

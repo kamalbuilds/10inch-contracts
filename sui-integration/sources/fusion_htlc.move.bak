@@ -1,0 +1,231 @@
+module fusion_swap::fusion_htlc {
+    use std::vector;
+    use std::option::{Self, Option};
+    use sui::object::{Self, UID, ID};
+    use sui::tx_context::{Self, TxContext};
+    use sui::transfer;
+    use sui::coin::{Self, Coin};
+    use sui::clock::{Self, Clock};
+    use sui::event;
+    use sui::hash::keccak256;
+    use sui::balance::{Self, Balance};
+
+    // Error codes
+    const E_INVALID_SECRET: u64 = 1;
+    const E_EXPIRED: u64 = 2;
+    const E_NOT_EXPIRED: u64 = 3;
+    const E_NOT_PARTICIPANT: u64 = 4;
+    const E_ALREADY_COMPLETED: u64 = 5;
+    const E_INVALID_HASH_LENGTH: u64 = 6;
+    const E_INSUFFICIENT_AMOUNT: u64 = 7;
+
+    // HTLC object - represents a single swap
+    struct HTLC<phantom T> has key, store {
+        id: UID,
+        initiator: address,
+        recipient: address,
+        balance: Balance<T>,
+        hashlock: vector<u8>,
+        timelock: u64,
+        secret: Option<vector<u8>>,
+        completed: bool,
+        refunded: bool,
+    }
+
+    // Registry to track all HTLCs
+    struct HTLCRegistry has key {
+        id: UID,
+        htlc_count: u64,
+        total_volume: u64,
+    }
+
+    // Events
+    struct HTLCCreated has copy, drop {
+        htlc_id: ID,
+        initiator: address,
+        recipient: address,
+        amount: u64,
+        hashlock: vector<u8>,
+        timelock: u64,
+    }
+
+    struct HTLCCompleted has copy, drop {
+        htlc_id: ID,
+        secret: vector<u8>,
+        recipient: address,
+    }
+
+    struct HTLCRefunded has copy, drop {
+        htlc_id: ID,
+        initiator: address,
+    }
+
+    // Initialize registry
+    fun init(ctx: &mut TxContext) {
+        transfer::share_object(HTLCRegistry {
+            id: object::new(ctx),
+            htlc_count: 0,
+            total_volume: 0,
+        });
+    }
+
+    // Create a new HTLC
+    public entry fun create_htlc<T>(
+        payment: Coin<T>,
+        recipient: address,
+        hashlock: vector<u8>,
+        timelock: u64,
+        clock: &Clock,
+        registry: &mut HTLCRegistry,
+        ctx: &mut TxContext
+    ) {
+        let sender = tx_context::sender(ctx);
+        let amount = coin::value(&payment);
+        
+        // Validate inputs
+        assert!(vector::length(&hashlock) == 32, E_INVALID_HASH_LENGTH);
+        assert!(clock::timestamp_ms(clock) < timelock, E_EXPIRED);
+        assert!(amount > 0, E_INSUFFICIENT_AMOUNT);
+
+        let htlc_id = object::new(ctx);
+        let id_copy = object::uid_to_inner(&htlc_id);
+
+        // Create HTLC object
+        let htlc = HTLC<T> {
+            id: htlc_id,
+            initiator: sender,
+            recipient,
+            balance: coin::into_balance(payment),
+            hashlock,
+            timelock,
+            secret: option::none(),
+            completed: false,
+            refunded: false,
+        };
+
+        // Update registry
+        registry.htlc_count = registry.htlc_count + 1;
+        registry.total_volume = registry.total_volume + amount;
+
+        // Emit event
+        event::emit(HTLCCreated {
+            htlc_id: id_copy,
+            initiator: sender,
+            recipient,
+            amount,
+            hashlock,
+            timelock,
+        });
+
+        // Transfer HTLC to recipient (they need it to complete)
+        transfer::transfer(htlc, recipient);
+    }
+
+    // Complete HTLC with secret
+    public entry fun complete_htlc<T>(
+        htlc: &mut HTLC<T>,
+        secret: vector<u8>,
+        clock: &Clock,
+        ctx: &mut TxContext
+    ) {
+        let sender = tx_context::sender(ctx);
+        
+        // Validate
+        assert!(htlc.recipient == sender, E_NOT_PARTICIPANT);
+        assert!(!htlc.completed && !htlc.refunded, E_ALREADY_COMPLETED);
+        assert!(clock::timestamp_ms(clock) < htlc.timelock, E_EXPIRED);
+        
+        // Verify secret
+        let secret_hash = keccak256(&secret);
+        assert!(secret_hash == htlc.hashlock, E_INVALID_SECRET);
+
+        // Mark as completed and store secret
+        htlc.completed = true;
+        htlc.secret = option::some(secret);
+
+        // Transfer funds to recipient
+        let amount = balance::value(&htlc.balance);
+        let payment = coin::take(&mut htlc.balance, amount, ctx);
+        transfer::public_transfer(payment, htlc.recipient);
+
+        // Emit event
+        event::emit(HTLCCompleted {
+            htlc_id: object::uid_to_inner(&htlc.id),
+            secret,
+            recipient: htlc.recipient,
+        });
+    }
+
+    // Refund expired HTLC
+    public entry fun refund_htlc<T>(
+        htlc: &mut HTLC<T>,
+        clock: &Clock,
+        ctx: &mut TxContext
+    ) {
+        let sender = tx_context::sender(ctx);
+        
+        // Validate
+        assert!(htlc.initiator == sender || htlc.recipient == sender, E_NOT_PARTICIPANT);
+        assert!(!htlc.completed && !htlc.refunded, E_ALREADY_COMPLETED);
+        assert!(clock::timestamp_ms(clock) >= htlc.timelock, E_NOT_EXPIRED);
+
+        // Mark as refunded
+        htlc.refunded = true;
+
+        // Transfer funds back to initiator
+        let amount = balance::value(&htlc.balance);
+        let payment = coin::take(&mut htlc.balance, amount, ctx);
+        transfer::public_transfer(payment, htlc.initiator);
+
+        // Emit event
+        event::emit(HTLCRefunded {
+            htlc_id: object::uid_to_inner(&htlc.id),
+            initiator: htlc.initiator,
+        });
+    }
+
+    // Get HTLC details
+    public fun get_htlc_info<T>(htlc: &HTLC<T>): (
+        address,
+        address,
+        u64,
+        vector<u8>,
+        u64,
+        bool,
+        bool
+    ) {
+        (
+            htlc.initiator,
+            htlc.recipient,
+            balance::value(&htlc.balance),
+            htlc.hashlock,
+            htlc.timelock,
+            htlc.completed,
+            htlc.refunded
+        )
+    }
+
+    // Check if HTLC can be completed
+    public fun can_complete<T>(htlc: &HTLC<T>, clock: &Clock): bool {
+        !htlc.completed && 
+        !htlc.refunded && 
+        clock::timestamp_ms(clock) < htlc.timelock
+    }
+
+    // Check if HTLC can be refunded
+    public fun can_refund<T>(htlc: &HTLC<T>, clock: &Clock): bool {
+        !htlc.completed && 
+        !htlc.refunded && 
+        clock::timestamp_ms(clock) >= htlc.timelock
+    }
+
+    // Get revealed secret (if completed)
+    public fun get_secret<T>(htlc: &HTLC<T>): Option<vector<u8>> {
+        htlc.secret
+    }
+
+    #[test_only]
+    public fun init_for_testing(ctx: &mut TxContext) {
+        init(ctx);
+    }
+}

@@ -1,0 +1,775 @@
+// Copyright (c) 1inch Network
+// SPDX-License-Identifier: MIT
+
+/// Cross-Chain Bridge implementation for Sui
+/// This module coordinates atomic swaps across different blockchains
+/// Leverages Sui's dynamic fields, shared objects, and transfer-to-object patterns
+module fusion_swap::cross_chain_bridge {
+    use sui::object::{Self, UID, ID};
+    use sui::tx_context::{Self, TxContext};
+    use sui::transfer;
+    use sui::coin::{Self, Coin};
+    use sui::sui::SUI;
+    use sui::clock::{Self, Clock};
+    use sui::event;
+    use sui::table::{Self, Table};
+    use sui::dynamic_field;
+    use sui::balance::{Self, Balance};
+    use std::hash;
+    use std::vector;
+    use std::option::{Self, Option};
+    use std::string::{Self, String};
+
+    // Import from atomic_swap module
+    use fusion_swap::atomic_swap::{Self, SwapEscrow, HTLCContract};
+
+    // ============ Error Codes ============
+    
+    /// Bridge protocol errors
+    const E_BRIDGE_NOT_INITIALIZED: u64 = 6000;
+    const E_BRIDGE_PAUSED: u64 = 6001;
+    const E_INVALID_BRIDGE_VERSION: u64 = 6002;
+    const E_UNSUPPORTED_CHAIN: u64 = 6003;
+    const E_CHAIN_ALREADY_SUPPORTED: u64 = 6004;
+    const E_CHAIN_NOT_SUPPORTED: u64 = 6005;
+    
+    /// Bridge order errors
+    const E_ORDER_NOT_FOUND: u64 = 7000;
+    const E_ORDER_ALREADY_EXISTS: u64 = 7001;
+    const E_ORDER_EXPIRED: u64 = 7002;
+    const E_ORDER_NOT_PENDING: u64 = 7003;
+    const E_ORDER_ALREADY_COMPLETED: u64 = 7004;
+    const E_ORDER_ALREADY_CANCELLED: u64 = 7005;
+    
+    /// Bridge validation errors
+    const E_INVALID_DESTINATION_CHAIN: u64 = 8000;
+    const E_INVALID_DESTINATION_ADDRESS: u64 = 8001;
+    const E_INVALID_SOURCE_TXHASH: u64 = 8002;
+    const E_INVALID_BRIDGE_FEE: u64 = 8003;
+    const E_INSUFFICIENT_BRIDGE_AMOUNT: u64 = 8004;
+
+    // ============ Constants ============
+    
+    /// Supported blockchain identifiers
+    const CHAIN_ETHEREUM: u8 = 1;
+    const CHAIN_BITCOIN: u8 = 2;
+    const CHAIN_SUI: u8 = 3;
+    const CHAIN_APTOS: u8 = 4;
+    const CHAIN_POLYGON: u8 = 5;
+    const CHAIN_ARBITRUM: u8 = 6;
+    const CHAIN_OPTIMISM: u8 = 7;
+    const CHAIN_BSC: u8 = 8;
+
+    /// Bridge protocol settings
+    const BRIDGE_VERSION: u64 = 1;
+    const MIN_BRIDGE_AMOUNT: u64 = 10000; // Minimum 0.00001 SUI
+    const BRIDGE_FEE_RATE: u64 = 5; // 0.05% in basis points
+    const MAX_BRIDGE_FEE_RATE: u64 = 50; // 0.5% maximum
+    
+    /// Order states
+    const ORDER_STATE_PENDING: u8 = 0;
+    const ORDER_STATE_COMPLETED: u8 = 1;
+    const ORDER_STATE_CANCELLED: u8 = 2;
+    const ORDER_STATE_EXPIRED: u8 = 3;
+
+    // ============ Structs ============
+
+    /// Supported blockchain configuration
+    struct ChainConfig has copy, drop, store {
+        chain_id: u8,
+        chain_name: String,
+        is_active: bool,
+        min_confirmation: u64,
+        fee_rate: u64,
+    }
+
+    /// Cross-chain bridge order
+    struct BridgeOrder has copy, drop, store {
+        order_id: ID,
+        order_type: u8, // 0 = outbound (Sui -> Other), 1 = inbound (Other -> Sui)
+        sender: address,
+        recipient: address,
+        source_chain: u8,
+        destination_chain: u8,
+        source_amount: u64,
+        destination_amount: u64,
+        bridge_fee: u64,
+        source_txhash: Option<String>,
+        destination_txhash: Option<String>,
+        hashlock: vector<u8>,
+        timelock: u64,
+        state: u8,
+        created_at: u64,
+        completed_at: Option<u64>,
+        cancelled_at: Option<u64>,
+    }
+
+    /// Cross-chain bridge registry - shared object
+    struct CrossChainBridge has key {
+        id: UID,
+        admin: address,
+        version: u64,
+        is_paused: bool,
+        supported_chains: Table<u8, ChainConfig>,
+        orders: Table<ID, BridgeOrder>,
+        order_count: u64,
+        total_volume: u64,
+        bridge_fees_collected: u64,
+        default_fee_rate: u64,
+    }
+
+    /// Bridge order object for tracking individual cross-chain swaps
+    struct BridgeOrderObject<phantom T> has key, store {
+        id: UID,
+        order_id: ID,
+        bridge_order: BridgeOrder,
+        locked_balance: Option<Balance<T>>,
+        htlc_swap_id: Option<ID>,
+    }
+
+    /// Bridge admin capability
+    struct BridgeAdminCap has key, store {
+        id: UID,
+    }
+
+    // ============ Events ============
+
+    /// Event emitted when a new bridge order is created
+    struct BridgeOrderCreatedEvent has copy, drop {
+        order_id: ID,
+        order_type: u8,
+        sender: address,
+        recipient: address,
+        source_chain: u8,
+        destination_chain: u8,
+        amount: u64,
+        bridge_fee: u64,
+        hashlock: vector<u8>,
+        timelock: u64,
+        created_at: u64,
+    }
+
+    /// Event emitted when a bridge order is completed
+    struct BridgeOrderCompletedEvent has copy, drop {
+        order_id: ID,
+        secret: vector<u8>,
+        destination_txhash: String,
+        completed_by: address,
+        completed_at: u64,
+    }
+
+    /// Event emitted when a bridge order is cancelled
+    struct BridgeOrderCancelledEvent has copy, drop {
+        order_id: ID,
+        cancelled_by: address,
+        cancelled_at: u64,
+    }
+
+    /// Event emitted when a new chain is added
+    struct ChainSupportAddedEvent has copy, drop {
+        chain_id: u8,
+        chain_name: String,
+        added_by: address,
+    }
+
+    // ============ Initialization ============
+
+    /// Initialize the cross-chain bridge protocol
+    fun init(ctx: &mut TxContext) {
+        let bridge_admin_cap = BridgeAdminCap {
+            id: object::new(ctx),
+        };
+
+        let bridge = CrossChainBridge {
+            id: object::new(ctx),
+            admin: tx_context::sender(ctx),
+            version: BRIDGE_VERSION,
+            is_paused: false,
+            supported_chains: table::new(ctx),
+            orders: table::new(ctx),
+            order_count: 0,
+            total_volume: 0,
+            bridge_fees_collected: 0,
+            default_fee_rate: BRIDGE_FEE_RATE,
+        };
+
+        // Add default supported chains
+        initialize_default_chains(&mut bridge, ctx);
+
+        transfer::transfer(bridge_admin_cap, tx_context::sender(ctx));
+        transfer::share_object(bridge);
+    }
+
+    /// Initialize default supported blockchains
+    fun initialize_default_chains(bridge: &mut CrossChainBridge, _ctx: &mut TxContext) {
+        // Ethereum
+        table::add(&mut bridge.supported_chains, CHAIN_ETHEREUM, ChainConfig {
+            chain_id: CHAIN_ETHEREUM,
+            chain_name: string::utf8(b"Ethereum"),
+            is_active: true,
+            min_confirmation: 12,
+            fee_rate: BRIDGE_FEE_RATE,
+        });
+
+        // Bitcoin
+        table::add(&mut bridge.supported_chains, CHAIN_BITCOIN, ChainConfig {
+            chain_id: CHAIN_BITCOIN,
+            chain_name: string::utf8(b"Bitcoin"),
+            is_active: true,
+            min_confirmation: 6,
+            fee_rate: BRIDGE_FEE_RATE,
+        });
+
+        // Sui (native)
+        table::add(&mut bridge.supported_chains, CHAIN_SUI, ChainConfig {
+            chain_id: CHAIN_SUI,
+            chain_name: string::utf8(b"Sui"),
+            is_active: true,
+            min_confirmation: 1,
+            fee_rate: 0, // No fee for native chain
+        });
+
+        // Aptos
+        table::add(&mut bridge.supported_chains, CHAIN_APTOS, ChainConfig {
+            chain_id: CHAIN_APTOS,
+            chain_name: string::utf8(b"Aptos"),
+            is_active: true,
+            min_confirmation: 1,
+            fee_rate: BRIDGE_FEE_RATE,
+        });
+
+        // Polygon
+        table::add(&mut bridge.supported_chains, CHAIN_POLYGON, ChainConfig {
+            chain_id: CHAIN_POLYGON,
+            chain_name: string::utf8(b"Polygon"),
+            is_active: true,
+            min_confirmation: 5,
+            fee_rate: BRIDGE_FEE_RATE,
+        });
+
+        // Arbitrum
+        table::add(&mut bridge.supported_chains, CHAIN_ARBITRUM, ChainConfig {
+            chain_id: CHAIN_ARBITRUM,
+            chain_name: string::utf8(b"Arbitrum"),
+            is_active: true,
+            min_confirmation: 1,
+            fee_rate: BRIDGE_FEE_RATE,
+        });
+
+        // Optimism
+        table::add(&mut bridge.supported_chains, CHAIN_OPTIMISM, ChainConfig {
+            chain_id: CHAIN_OPTIMISM,
+            chain_name: string::utf8(b"Optimism"),
+            is_active: true,
+            min_confirmation: 1,
+            fee_rate: BRIDGE_FEE_RATE,
+        });
+    }
+
+    // ============ Core Bridge Functions ============
+
+    /// Create an outbound bridge order (Sui -> Other Chain)
+    public fun create_outbound_order<T>(
+        bridge: &mut CrossChainBridge,
+        payment: Coin<T>,
+        destination_chain: u8,
+        recipient: address,
+        hashlock: vector<u8>,
+        timelock: u64,
+        clock: &Clock,
+        ctx: &mut TxContext
+    ): ID {
+        // Validate bridge state
+        assert!(!bridge.is_paused, E_BRIDGE_PAUSED);
+        assert!(bridge.version == BRIDGE_VERSION, E_INVALID_BRIDGE_VERSION);
+        
+        // Validate destination chain
+        assert!(table::contains(&bridge.supported_chains, destination_chain), E_UNSUPPORTED_CHAIN);
+        let chain_config = table::borrow(&bridge.supported_chains, destination_chain);
+        assert!(chain_config.is_active, E_CHAIN_NOT_SUPPORTED);
+        
+        // Validate inputs
+        let amount = coin::value(&payment);
+        assert!(amount >= MIN_BRIDGE_AMOUNT, E_INSUFFICIENT_BRIDGE_AMOUNT);
+        assert!(vector::length(&hashlock) == 32, E_INVALID_DESTINATION_ADDRESS);
+        
+        let current_time = clock::timestamp_ms(clock);
+        assert!(timelock > current_time + 3600000, E_ORDER_EXPIRED); // At least 1 hour
+        
+        // Calculate bridge fee
+        let bridge_fee = (amount * chain_config.fee_rate) / 10000;
+        let destination_amount = amount - bridge_fee;
+        
+        // Create bridge order
+        let order_id = object::new(ctx);
+        let order_id_copy = object::uid_to_inner(&order_id);
+        
+        let bridge_order = BridgeOrder {
+            order_id: order_id_copy,
+            order_type: 0, // Outbound
+            sender: tx_context::sender(ctx),
+            recipient,
+            source_chain: CHAIN_SUI,
+            destination_chain,
+            source_amount: amount,
+            destination_amount,
+            bridge_fee,
+            source_txhash: option::none(),
+            destination_txhash: option::none(),
+            hashlock,
+            timelock,
+            state: ORDER_STATE_PENDING,
+            created_at: current_time,
+            completed_at: option::none(),
+            cancelled_at: option::none(),
+        };
+
+        // Create bridge order object
+        let bridge_order_obj = BridgeOrderObject<T> {
+            id: order_id,
+            order_id: order_id_copy,
+            bridge_order,
+            locked_balance: option::some(coin::into_balance(payment)),
+            htlc_swap_id: option::none(),
+        };
+
+        // Update bridge state
+        table::add(&mut bridge.orders, order_id_copy, bridge_order);
+        bridge.order_count = bridge.order_count + 1;
+        bridge.total_volume = bridge.total_volume + amount;
+        bridge.bridge_fees_collected = bridge.bridge_fees_collected + bridge_fee;
+
+        // Emit event
+        event::emit(BridgeOrderCreatedEvent {
+            order_id: order_id_copy,
+            order_type: 0,
+            sender: tx_context::sender(ctx),
+            recipient,
+            source_chain: CHAIN_SUI,
+            destination_chain,
+            amount: destination_amount,
+            bridge_fee,
+            hashlock,
+            timelock,
+            created_at: current_time,
+        });
+
+        // Transfer to sender to hold until completion
+        transfer::public_transfer(bridge_order_obj, tx_context::sender(ctx));
+        
+        order_id_copy
+    }
+
+    /// Create an inbound bridge order (Other Chain -> Sui)
+    public fun create_inbound_order(
+        bridge: &mut CrossChainBridge,
+        source_chain: u8,
+        source_txhash: String,
+        sender: address,
+        amount: u64,
+        hashlock: vector<u8>,
+        timelock: u64,
+        clock: &Clock,
+        ctx: &mut TxContext
+    ): ID {
+        // Validate bridge state
+        assert!(!bridge.is_paused, E_BRIDGE_PAUSED);
+        assert!(bridge.version == BRIDGE_VERSION, E_INVALID_BRIDGE_VERSION);
+        
+        // Validate source chain
+        assert!(table::contains(&bridge.supported_chains, source_chain), E_UNSUPPORTED_CHAIN);
+        let chain_config = table::borrow(&bridge.supported_chains, source_chain);
+        assert!(chain_config.is_active, E_CHAIN_NOT_SUPPORTED);
+        
+        // Validate inputs
+        assert!(amount >= MIN_BRIDGE_AMOUNT, E_INSUFFICIENT_BRIDGE_AMOUNT);
+        assert!(vector::length(&hashlock) == 32, E_INVALID_DESTINATION_ADDRESS);
+        assert!(string::length(&source_txhash) > 0, E_INVALID_SOURCE_TXHASH);
+        
+        let current_time = clock::timestamp_ms(clock);
+        assert!(timelock > current_time + 3600000, E_ORDER_EXPIRED);
+        
+        // Calculate bridge fee
+        let bridge_fee = (amount * chain_config.fee_rate) / 10000;
+        let destination_amount = amount - bridge_fee;
+        
+        // Create bridge order
+        let order_id = object::new(ctx);
+        let order_id_copy = object::uid_to_inner(&order_id);
+        
+        let bridge_order = BridgeOrder {
+            order_id: order_id_copy,
+            order_type: 1, // Inbound
+            sender,
+            recipient: tx_context::sender(ctx),
+            source_chain,
+            destination_chain: CHAIN_SUI,
+            source_amount: amount,
+            destination_amount,
+            bridge_fee,
+            source_txhash: option::some(source_txhash),
+            destination_txhash: option::none(),
+            hashlock,
+            timelock,
+            state: ORDER_STATE_PENDING,
+            created_at: current_time,
+            completed_at: option::none(),
+            cancelled_at: option::none(),
+        };
+
+        // Update bridge state
+        table::add(&mut bridge.orders, order_id_copy, bridge_order);
+        bridge.order_count = bridge.order_count + 1;
+        bridge.total_volume = bridge.total_volume + amount;
+
+        // Emit event
+        event::emit(BridgeOrderCreatedEvent {
+            order_id: order_id_copy,
+            order_type: 1,
+            sender,
+            recipient: tx_context::sender(ctx),
+            source_chain,
+            destination_chain: CHAIN_SUI,
+            amount: destination_amount,
+            bridge_fee,
+            hashlock,
+            timelock,
+            created_at: current_time,
+        });
+
+        object::delete(order_id);
+        order_id_copy
+    }
+
+    /// Complete a bridge order by revealing the secret
+    public fun complete_bridge_order<T>(
+        bridge: &mut CrossChainBridge,
+        bridge_order_obj: BridgeOrderObject<T>,
+        secret: vector<u8>,
+        destination_txhash: String,
+        clock: &Clock,
+        ctx: &mut TxContext
+    ): (Coin<T>, vector<u8>) {
+        assert!(!bridge.is_paused, E_BRIDGE_PAUSED);
+        
+        let order_id = bridge_order_obj.order_id;
+        assert!(table::contains(&bridge.orders, order_id), E_ORDER_NOT_FOUND);
+        
+        let bridge_order = table::borrow_mut(&mut bridge.orders, order_id);
+        assert!(bridge_order.state == ORDER_STATE_PENDING, E_ORDER_NOT_PENDING);
+        
+        let current_time = clock::timestamp_ms(clock);
+        assert!(current_time <= bridge_order.timelock, E_ORDER_EXPIRED);
+        
+        // Verify the secret matches the hashlock
+        let secret_hash = hash::sha2_256(secret);
+        assert!(secret_hash == bridge_order.hashlock, E_INVALID_SOURCE_TXHASH);
+        
+        // Update order state
+        bridge_order.state = ORDER_STATE_COMPLETED;
+        bridge_order.completed_at = option::some(current_time);
+        bridge_order.destination_txhash = option::some(destination_txhash);
+        
+        // Extract locked funds
+        let BridgeOrderObject { 
+            id, 
+            order_id: _, 
+            bridge_order: _, 
+            locked_balance, 
+            htlc_swap_id: _ 
+        } = bridge_order_obj;
+        
+        object::delete(id);
+        
+        let balance = option::extract(&mut locked_balance);
+        option::destroy_none(locked_balance);
+        let payment = coin::from_balance(balance, ctx);
+        
+        // Emit completion event
+        event::emit(BridgeOrderCompletedEvent {
+            order_id,
+            secret,
+            destination_txhash,
+            completed_by: tx_context::sender(ctx),
+            completed_at: current_time,
+        });
+
+        (payment, secret)
+    }
+
+    /// Cancel a bridge order
+    public fun cancel_bridge_order<T>(
+        bridge: &mut CrossChainBridge,
+        bridge_order_obj: BridgeOrderObject<T>,
+        clock: &Clock,
+        ctx: &mut TxContext
+    ): Coin<T> {
+        assert!(!bridge.is_paused, E_BRIDGE_PAUSED);
+        
+        let order_id = bridge_order_obj.order_id;
+        assert!(table::contains(&bridge.orders, order_id), E_ORDER_NOT_FOUND);
+        
+        let bridge_order = table::borrow_mut(&mut bridge.orders, order_id);
+        assert!(bridge_order.state == ORDER_STATE_PENDING, E_ORDER_NOT_PENDING);
+        
+        let current_time = clock::timestamp_ms(clock);
+        // Can cancel if expired OR if sender is cancelling their own order
+        let can_cancel = current_time > bridge_order.timelock || 
+                        tx_context::sender(ctx) == bridge_order.sender;
+        assert!(can_cancel, E_ORDER_NOT_PENDING);
+        
+        // Update order state
+        bridge_order.state = ORDER_STATE_CANCELLED;
+        bridge_order.cancelled_at = option::some(current_time);
+        
+        // Extract locked funds
+        let BridgeOrderObject { 
+            id, 
+            order_id: _, 
+            bridge_order: _, 
+            locked_balance, 
+            htlc_swap_id: _ 
+        } = bridge_order_obj;
+        
+        object::delete(id);
+        
+        let balance = option::extract(&mut locked_balance);
+        option::destroy_none(locked_balance);
+        let payment = coin::from_balance(balance, ctx);
+        
+        // Emit cancellation event
+        event::emit(BridgeOrderCancelledEvent {
+            order_id,
+            cancelled_by: tx_context::sender(ctx),
+            cancelled_at: current_time,
+        });
+
+        payment
+    }
+
+    // ============ View Functions ============
+
+    /// Get bridge order information
+    public fun get_bridge_order(bridge: &CrossChainBridge, order_id: ID): BridgeOrder {
+        assert!(table::contains(&bridge.orders, order_id), E_ORDER_NOT_FOUND);
+        *table::borrow(&bridge.orders, order_id)
+    }
+
+    /// Check if bridge order exists
+    public fun bridge_order_exists(bridge: &CrossChainBridge, order_id: ID): bool {
+        table::contains(&bridge.orders, order_id)
+    }
+
+    /// Get supported chain configuration
+    public fun get_chain_config(bridge: &CrossChainBridge, chain_id: u8): ChainConfig {
+        assert!(table::contains(&bridge.supported_chains, chain_id), E_UNSUPPORTED_CHAIN);
+        *table::borrow(&bridge.supported_chains, chain_id)
+    }
+
+    /// Check if chain is supported
+    public fun is_chain_supported(bridge: &CrossChainBridge, chain_id: u8): bool {
+        table::contains(&bridge.supported_chains, chain_id)
+    }
+
+    /// Get bridge statistics
+    public fun get_bridge_stats(bridge: &CrossChainBridge): (u64, u64, u64, u64, bool) {
+        (
+            bridge.order_count,
+            bridge.total_volume,
+            bridge.bridge_fees_collected,
+            bridge.default_fee_rate,
+            bridge.is_paused
+        )
+    }
+
+    /// Calculate bridge fee for an amount and destination chain
+    public fun calculate_bridge_fee(
+        bridge: &CrossChainBridge, 
+        amount: u64, 
+        destination_chain: u8
+    ): u64 {
+        if (table::contains(&bridge.supported_chains, destination_chain)) {
+            let chain_config = table::borrow(&bridge.supported_chains, destination_chain);
+            (amount * chain_config.fee_rate) / 10000
+        } else {
+            (amount * bridge.default_fee_rate) / 10000
+        }
+    }
+
+    // ============ Admin Functions ============
+
+    /// Add support for a new blockchain
+    public fun add_chain_support(
+        _: &BridgeAdminCap,
+        bridge: &mut CrossChainBridge,
+        chain_id: u8,
+        chain_name: String,
+        min_confirmation: u64,
+        fee_rate: u64,
+        ctx: &mut TxContext
+    ) {
+        assert!(!table::contains(&bridge.supported_chains, chain_id), E_CHAIN_ALREADY_SUPPORTED);
+        assert!(fee_rate <= MAX_BRIDGE_FEE_RATE, E_INVALID_BRIDGE_FEE);
+        
+        table::add(&mut bridge.supported_chains, chain_id, ChainConfig {
+            chain_id,
+            chain_name,
+            is_active: true,
+            min_confirmation,
+            fee_rate,
+        });
+
+        event::emit(ChainSupportAddedEvent {
+            chain_id,
+            chain_name,
+            added_by: tx_context::sender(ctx),
+        });
+    }
+
+    /// Update chain configuration
+    public fun update_chain_config(
+        _: &BridgeAdminCap,
+        bridge: &mut CrossChainBridge,
+        chain_id: u8,
+        is_active: bool,
+        min_confirmation: u64,
+        fee_rate: u64,
+        _ctx: &mut TxContext
+    ) {
+        assert!(table::contains(&bridge.supported_chains, chain_id), E_UNSUPPORTED_CHAIN);
+        assert!(fee_rate <= MAX_BRIDGE_FEE_RATE, E_INVALID_BRIDGE_FEE);
+        
+        let chain_config = table::borrow_mut(&mut bridge.supported_chains, chain_id);
+        chain_config.is_active = is_active;
+        chain_config.min_confirmation = min_confirmation;
+        chain_config.fee_rate = fee_rate;
+    }
+
+    /// Pause the bridge protocol
+    public fun pause_bridge(_: &BridgeAdminCap, bridge: &mut CrossChainBridge) {
+        bridge.is_paused = true;
+    }
+
+    /// Unpause the bridge protocol
+    public fun unpause_bridge(_: &BridgeAdminCap, bridge: &mut CrossChainBridge) {
+        bridge.is_paused = false;
+    }
+
+    // ============ Test Functions ============
+
+    #[test_only]
+    use sui::test_scenario;
+    #[test_only]
+    use sui::coin::mint_for_testing;
+
+    #[test_only]
+    public fun init_for_testing(ctx: &mut TxContext) {
+        init(ctx);
+    }
+
+    #[test]
+    fun test_create_outbound_order() {
+        let scenario_val = test_scenario::begin(@0x1);
+        let scenario = &mut scenario_val;
+        
+        // Initialize bridge
+        test_scenario::next_tx(scenario, @0x1);
+        {
+            init_for_testing(test_scenario::ctx(scenario));
+        };
+
+        // Create outbound order
+        test_scenario::next_tx(scenario, @0x1);
+        {
+            let bridge = test_scenario::take_shared<CrossChainBridge>(scenario);
+            let clock = clock::create_for_testing(test_scenario::ctx(scenario));
+            
+            let payment = mint_for_testing<SUI>(1000000, test_scenario::ctx(scenario));
+            let hashlock = hash::sha2_256(b"test_secret_32_bytes_long_string");
+            let timelock = clock::timestamp_ms(&clock) + 3600000; // 1 hour
+            
+            let order_id = create_outbound_order(
+                &mut bridge,
+                payment,
+                CHAIN_ETHEREUM,
+                @0x2,
+                hashlock,
+                timelock,
+                &clock,
+                test_scenario::ctx(scenario)
+            );
+            
+            assert!(bridge_order_exists(&bridge, order_id), 0);
+            
+            test_scenario::return_shared(bridge);
+            clock::destroy_for_testing(clock);
+        };
+
+        test_scenario::end(scenario_val);
+    }
+
+    #[test]
+    fun test_complete_bridge_order() {
+        let scenario_val = test_scenario::begin(@0x1);
+        let scenario = &mut scenario_val;
+        
+        // Initialize and create order
+        test_scenario::next_tx(scenario, @0x1);
+        {
+            init_for_testing(test_scenario::ctx(scenario));
+        };
+
+        test_scenario::next_tx(scenario, @0x1);
+        {
+            let bridge = test_scenario::take_shared<CrossChainBridge>(scenario);
+            let clock = clock::create_for_testing(test_scenario::ctx(scenario));
+            
+            let payment = mint_for_testing<SUI>(1000000, test_scenario::ctx(scenario));
+            let hashlock = hash::sha2_256(b"test_secret_32_bytes_long_string");
+            let timelock = clock::timestamp_ms(&clock) + 3600000;
+            
+            create_outbound_order(
+                &mut bridge,
+                payment,
+                CHAIN_ETHEREUM,
+                @0x2,
+                hashlock,
+                timelock,
+                &clock,
+                test_scenario::ctx(scenario)
+            );
+            
+            test_scenario::return_shared(bridge);
+            clock::destroy_for_testing(clock);
+        };
+
+        // Complete order
+        test_scenario::next_tx(scenario, @0x1);
+        {
+            let bridge = test_scenario::take_shared<CrossChainBridge>(scenario);
+            let bridge_order_obj = test_scenario::take_from_sender<BridgeOrderObject<SUI>>(scenario);
+            let clock = clock::create_for_testing(test_scenario::ctx(scenario));
+            
+            let secret = b"test_secret_32_bytes_long_string";
+            let destination_txhash = string::utf8(b"0x1234567890abcdef");
+            
+            let (payment, revealed_secret) = complete_bridge_order(
+                &mut bridge,
+                bridge_order_obj,
+                secret,
+                destination_txhash,
+                &clock,
+                test_scenario::ctx(scenario)
+            );
+            
+            assert!(revealed_secret == secret, 1);
+            assert!(coin::value(&payment) > 0, 2);
+            
+            test_scenario::return_shared(bridge);
+            coin::burn_for_testing(payment);
+            clock::destroy_for_testing(clock);
+        };
+
+        test_scenario::end(scenario_val);
+    }
+} 

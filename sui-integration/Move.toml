@@ -1,0 +1,13 @@
+[package]
+name = "fusion_swap_sui"
+version = "1.0.0"
+authors = ["1inch Network"]
+
+[dependencies]
+Sui = { git = "https://github.com/MystenLabs/sui.git", subdir = "crates/sui-framework/packages/sui-framework", rev = "framework/mainnet" }
+
+[addresses]
+fusion_swap = "0x0"
+sui = "0x2"
+
+[dev-dependencies] 

@@ -1,0 +1,404 @@
+/// 1inch Fusion+ Resolver Module for Sui
+/// Handles cross-chain atomic swap resolution and relaying
+module fusion_swap::resolver {
+    use std::vector;
+    use sui::object::{Self, UID, ID};
+    use sui::transfer;
+    use sui::tx_context::{Self, TxContext};
+    use sui::coin::{Self, Coin};
+    use sui::balance::{Self, Balance};
+    use sui::clock::{Self, Clock};
+    use sui::event;
+    use sui::table::{Self, Table};
+    use sui::hash::keccak256;
+    use sui::dynamic_object_field as dof;
+    
+    use fusion_swap::atomic_swap::{Self, HTLCContract};
+
+    // ============ Errors ============
+    
+    const E_NOT_OWNER: u64 = 200;
+    const E_NOT_RESOLVER: u64 = 201;
+    const E_ORDER_NOT_FOUND: u64 = 202;
+    const E_ORDER_ALREADY_DEPLOYED: u64 = 203;
+    const E_INVALID_SECRET: u64 = 204;
+    const E_ORDER_EXPIRED: u64 = 205;
+    const E_ORDER_NOT_EXPIRED: u64 = 206;
+    const E_ORDER_COMPLETED: u64 = 207;
+    const E_ORDER_CANCELLED: u64 = 208;
+    const E_INSUFFICIENT_SAFETY_DEPOSIT: u64 = 209;
+    const E_INVALID_AMOUNT: u64 = 210;
+
+    // ============ Constants ============
+    
+    const MIN_SAFETY_DEPOSIT: u64 = 1_000_000; // Minimum safety deposit
+    const RESOLVER_FEE_BPS: u64 = 25; // 0.25% resolver fee
+    const TIMELOCK_BUFFER: u64 = 3600; // 1 hour buffer between src and dst
+
+    // ============ Structs ============
+    
+    struct ResolverOrder has key, store {
+        id: UID,
+        order_id: u64,
+        initiator: address,
+        resolver: address,
+        src_chain_id: u64,
+        dst_chain_id: u64,
+        src_amount: u64,
+        dst_amount: u64,
+        safety_deposit: u64,
+        secret_hash: vector<u8>,
+        src_timelock: u64,
+        dst_timelock: u64,
+        src_deployed: bool,
+        dst_deployed: bool,
+        completed: bool,
+        cancelled: bool,
+        created_at: u64,
+        completed_at: u64,
+    }
+
+    struct ResolverEscrow<phantom T> has key, store {
+        id: UID,
+        order_id: u64,
+        coins: Balance<T>,
+        safety_deposit: Balance<T>,
+    }
+
+    struct ResolverHub has key {
+        id: UID,
+        next_order_id: u64,
+        orders: Table<u64, ID>,
+        secret_hash_to_order: Table<vector<u8>, u64>,
+        owner: address,
+        total_volume: u64,
+        total_fees_collected: u64,
+    }
+
+    struct AdminCap has key {
+        id: UID,
+    }
+
+    // ============ Events ============
+    
+    struct SrcDeployedEvent has copy, drop {
+        order_id: u64,
+        resolver: address,
+        amount: u64,
+        safety_deposit: u64,
+        secret_hash: vector<u8>,
+    }
+
+    struct DstDeployedEvent has copy, drop {
+        order_id: u64,
+        dst_chain_id: u64,
+        dst_amount: u64,
+    }
+
+    struct WithdrawnEvent has copy, drop {
+        order_id: u64,
+        withdrawer: address,
+        amount: u64,
+        is_source: bool,
+    }
+
+    struct CancelledEvent has copy, drop {
+        order_id: u64,
+        canceller: address,
+        amount_refunded: u64,
+    }
+
+    // ============ Initialize ============
+    
+    fun init(ctx: &mut TxContext) {
+        let hub = ResolverHub {
+            id: object::new(ctx),
+            next_order_id: 1,
+            orders: table::new(ctx),
+            secret_hash_to_order: table::new(ctx),
+            owner: tx_context::sender(ctx),
+            total_volume: 0,
+            total_fees_collected: 0,
+        };
+        
+        let admin_cap = AdminCap {
+            id: object::new(ctx),
+        };
+        
+        transfer::share_object(hub);
+        transfer::transfer(admin_cap, tx_context::sender(ctx));
+    }
+
+    // ============ Core Functions ============
+    
+    /// Deploy source escrow as resolver
+    public entry fun deploy_src<T>(
+        hub: &mut ResolverHub,
+        initiator: address,
+        dst_chain_id: u64,
+        src_amount: u64,
+        dst_amount: u64,
+        secret_hash: vector<u8>,
+        safety_deposit_coin: Coin<T>,
+        source_coin: Coin<T>,
+        clock: &Clock,
+        ctx: &mut TxContext,
+    ) {
+        let resolver = tx_context::sender(ctx);
+        
+        // Validate inputs
+        assert!(coin::value(&safety_deposit_coin) >= MIN_SAFETY_DEPOSIT, E_INSUFFICIENT_SAFETY_DEPOSIT);
+        assert!(coin::value(&source_coin) == src_amount, E_INVALID_AMOUNT);
+        assert!(vector::length(&secret_hash) == 32, atomic_swap::invalid_secret_hash());
+        
+        // Get order ID
+        let order_id = hub.next_order_id;
+        hub.next_order_id = order_id + 1;
+        
+        let current_time = clock::timestamp_ms(clock) / 1000;
+        let src_timelock = current_time + 7200; // 2 hours
+        let dst_timelock = src_timelock + TIMELOCK_BUFFER;
+        
+        // Create order
+        let order = ResolverOrder {
+            id: object::new(ctx),
+            order_id,
+            initiator,
+            resolver,
+            src_chain_id: 6, // Sui chain ID
+            dst_chain_id,
+            src_amount,
+            dst_amount,
+            safety_deposit: coin::value(&safety_deposit_coin),
+            secret_hash,
+            src_timelock,
+            dst_timelock,
+            src_deployed: true,
+            dst_deployed: false,
+            completed: false,
+            cancelled: false,
+            created_at: current_time,
+            completed_at: 0,
+        };
+        
+        let order_id_obj = object::uid_to_inner(&order.id);
+        
+        // Create escrow
+        let escrow = ResolverEscrow<T> {
+            id: object::new(ctx),
+            order_id,
+            coins: coin::into_balance(source_coin),
+            safety_deposit: coin::into_balance(safety_deposit_coin),
+        };
+        
+        // Store order reference
+        table::add(&mut hub.orders, order_id, order_id_obj);
+        table::add(&mut hub.secret_hash_to_order, secret_hash, order_id);
+        
+        // Update stats
+        hub.total_volume = hub.total_volume + src_amount;
+        
+        // Store escrow in order
+        dof::add(&mut order.id, b"escrow", escrow);
+        
+        // Emit event
+        event::emit(SrcDeployedEvent {
+            order_id,
+            resolver,
+            amount: src_amount,
+            safety_deposit: coin::value(&safety_deposit_coin),
+            secret_hash,
+        });
+        
+        // Share order
+        transfer::share_object(order);
+    }
+    
+    /// Mark destination escrow as deployed
+    public entry fun deploy_dst(
+        order: &mut ResolverOrder,
+        ctx: &TxContext,
+    ) {
+        let resolver = tx_context::sender(ctx);
+        
+        assert!(order.resolver == resolver, E_NOT_RESOLVER);
+        assert!(order.src_deployed, E_ORDER_NOT_FOUND);
+        assert!(!order.dst_deployed, E_ORDER_ALREADY_DEPLOYED);
+        assert!(!order.cancelled && !order.completed, E_ORDER_COMPLETED);
+        
+        order.dst_deployed = true;
+        
+        event::emit(DstDeployedEvent {
+            order_id: order.order_id,
+            dst_chain_id: order.dst_chain_id,
+            dst_amount: order.dst_amount,
+        });
+    }
+    
+    /// Withdraw funds by revealing secret
+    public entry fun withdraw<T>(
+        order: &mut ResolverOrder,
+        secret: vector<u8>,
+        is_source: bool,
+        clock: &Clock,
+        ctx: &mut TxContext,
+    ) {
+        let withdrawer = tx_context::sender(ctx);
+        
+        assert!(!order.completed, E_ORDER_COMPLETED);
+        assert!(!order.cancelled, E_ORDER_CANCELLED);
+        
+        // Verify secret
+        let computed_hash = keccak256(&secret);
+        assert!(computed_hash == order.secret_hash, E_INVALID_SECRET);
+        
+        let current_time = clock::timestamp_ms(clock) / 1000;
+        
+        if (is_source) {
+            // Resolver withdraws from source
+            assert!(withdrawer == order.resolver, E_NOT_RESOLVER);
+            assert!(current_time <= order.src_timelock, E_ORDER_EXPIRED);
+            
+            // Extract escrow
+            let escrow: ResolverEscrow<T> = dof::remove(&mut order.id, b"escrow");
+            let ResolverEscrow { id, order_id: _, coins, safety_deposit } = escrow;
+            
+            // Calculate resolver fee
+            let total_amount = balance::value(&coins);
+            let fee_amount = total_amount * RESOLVER_FEE_BPS / 10000;
+            let fee = balance::split(&mut coins, fee_amount);
+            
+            // Transfer to resolver
+            transfer::public_transfer(
+                coin::from_balance(coins, ctx),
+                withdrawer
+            );
+            transfer::public_transfer(
+                coin::from_balance(safety_deposit, ctx),
+                withdrawer
+            );
+            transfer::public_transfer(
+                coin::from_balance(fee, ctx),
+                withdrawer
+            );
+            
+            object::delete(id);
+            
+            order.completed = true;
+            order.completed_at = current_time;
+            
+        } else {
+            // User withdraws from destination (would be on different chain)
+            assert!(withdrawer == order.initiator, E_NOT_OWNER);
+            order.completed = true;
+            order.completed_at = current_time;
+        };
+        
+        event::emit(WithdrawnEvent {
+            order_id: order.order_id,
+            withdrawer,
+            amount: order.src_amount,
+            is_source,
+        });
+    }
+    
+    /// Cancel expired order
+    public entry fun cancel<T>(
+        order: &mut ResolverOrder,
+        clock: &Clock,
+        ctx: &mut TxContext,
+    ) {
+        let canceller = tx_context::sender(ctx);
+        
+        assert!(!order.completed, E_ORDER_COMPLETED);
+        assert!(!order.cancelled, E_ORDER_CANCELLED);
+        assert!(
+            canceller == order.initiator || canceller == order.resolver,
+            E_NOT_OWNER
+        );
+        
+        let current_time = clock::timestamp_ms(clock) / 1000;
+        assert!(current_time > order.src_timelock, E_ORDER_NOT_EXPIRED);
+        
+        order.cancelled = true;
+        
+        // If escrow exists, refund
+        if (dof::exists_(&order.id, b"escrow")) {
+            let escrow: ResolverEscrow<T> = dof::remove(&mut order.id, b"escrow");
+            let ResolverEscrow { id, order_id: _, coins, safety_deposit } = escrow;
+            
+            // Refund to initiator
+            transfer::public_transfer(
+                coin::from_balance(coins, ctx),
+                order.initiator
+            );
+            
+            // Return safety deposit to resolver
+            transfer::public_transfer(
+                coin::from_balance(safety_deposit, ctx),
+                order.resolver
+            );
+            
+            object::delete(id);
+        };
+        
+        event::emit(CancelledEvent {
+            order_id: order.order_id,
+            canceller,
+            amount_refunded: order.src_amount,
+        });
+    }
+
+    // ============ View Functions ============
+    
+    public fun get_order_details(order: &ResolverOrder): (
+        u64, address, address, u64, u64, u64, u64, bool, bool, bool
+    ) {
+        (
+            order.order_id,
+            order.initiator,
+            order.resolver,
+            order.src_amount,
+            order.dst_amount,
+            order.src_timelock,
+            order.dst_timelock,
+            order.src_deployed,
+            order.dst_deployed,
+            order.completed
+        )
+    }
+    
+    public fun can_withdraw(order: &ResolverOrder, user: address, is_source: bool, clock: &Clock): bool {
+        if (order.completed || order.cancelled) return false;
+        
+        let current_time = clock::timestamp_ms(clock) / 1000;
+        
+        if (is_source) {
+            user == order.resolver && current_time <= order.src_timelock
+        } else {
+            user == order.initiator && order.dst_deployed
+        }
+    }
+    
+    public fun can_cancel(order: &ResolverOrder, clock: &Clock): bool {
+        if (order.completed || order.cancelled) return false;
+        
+        let current_time = clock::timestamp_ms(clock) / 1000;
+        current_time > order.src_timelock
+    }
+    
+    public fun get_stats(hub: &ResolverHub): (u64, u64, u64) {
+        (hub.next_order_id - 1, hub.total_volume, hub.total_fees_collected)
+    }
+
+    // ============ Admin Functions ============
+    
+    public entry fun update_owner(
+        hub: &mut ResolverHub,
+        _: &AdminCap,
+        new_owner: address,
+        ctx: &TxContext,
+    ) {
+        hub.owner = new_owner;
+    }
+}

@@ -1,0 +1,606 @@
+// Copyright (c) 1inch Network
+// SPDX-License-Identifier: MIT
+
+/// Atomic Swap HTLC (Hash Time Locked Contract) implementation for Sui
+/// This module provides secure cross-chain atomic swaps using hash time locks
+/// Leverages Sui's object model, shared objects, and native clock
+
+module fusion_swap::atomic_swap {
+    use sui::object::{Self, UID, ID};
+    use sui::tx_context::{Self, TxContext};
+    use sui::transfer;
+    use sui::coin::{Self, Coin};
+    use sui::sui::SUI;
+    use sui::clock::{Self, Clock};
+    use sui::event;
+    use sui::table::{Self, Table};
+    use std::hash;
+    use sui::dynamic_field;
+    use sui::balance::{Self, Balance};
+    use std::vector;
+    use std::option::{Self, Option};
+
+    // ============ Error Codes ============
+    
+    /// Protocol errors
+    const E_PROTOCOL_NOT_INITIALIZED: u64 = 1000;
+    const E_PROTOCOL_ALREADY_INITIALIZED: u64 = 1001;
+    const E_PROTOCOL_PAUSED: u64 = 1002;
+    const E_INVALID_PROTOCOL_VERSION: u64 = 1003;
+    
+    /// Validation errors
+    const E_INVALID_HASHLOCK: u64 = 2000;
+    const E_INVALID_SECRET: u64 = 2001;
+    const E_INVALID_TIMELOCK: u64 = 2002;
+    const E_INVALID_AMOUNT: u64 = 2003;
+    const E_INVALID_PARTICIPANTS: u64 = 2004;
+    const E_INVALID_FEE_RATE: u64 = 2005;
+    
+    /// Authorization errors  
+    const E_UNAUTHORIZED_ACCESS: u64 = 3000;
+    const E_NOT_PARTICIPANT: u64 = 3001;
+    const E_NOT_ADMIN: u64 = 3002;
+    const E_INVALID_SENDER: u64 = 3003;
+    
+    /// State errors
+    const E_SWAP_NOT_FOUND: u64 = 4000;
+    const E_SWAP_ALREADY_EXISTS: u64 = 4001;
+    const E_SWAP_NOT_ACTIVE: u64 = 4002;
+    const E_SWAP_ALREADY_COMPLETED: u64 = 4003;
+    const E_SWAP_ALREADY_REFUNDED: u64 = 4004;
+    const E_SWAP_EXPIRED: u64 = 4005;
+    const E_SWAP_NOT_EXPIRED: u64 = 4006;
+    
+    /// Timing errors
+    const E_TIMELOCK_TOO_SHORT: u64 = 5000;
+    const E_TIMELOCK_TOO_LONG: u64 = 5001;
+    const E_TIMELOCK_EXPIRED: u64 = 5002;
+    const E_TIMELOCK_NOT_EXPIRED: u64 = 5003;
+
+    // ============ Constants ============
+    
+    /// Security constraints
+    const MIN_TIMELOCK_DURATION: u64 = 3600000; // 1 hour in milliseconds
+    const MAX_TIMELOCK_DURATION: u64 = 2592000000; // 30 days in milliseconds
+    const SECRET_HASH_LENGTH: u64 = 32; // SHA-256 hash length
+    const MIN_SWAP_AMOUNT: u64 = 1000; // Minimum 0.000001 SUI
+    
+    /// Protocol fees (in basis points, 10000 = 100%)
+    const PROTOCOL_FEE_RATE: u64 = 5; // 0.05%
+    const MAX_FEE_RATE: u64 = 100; // 1% maximum
+    
+    /// Protocol version
+    const PROTOCOL_VERSION: u64 = 1;
+
+    // ============ Structs ============
+    
+    /// Swap state enumeration
+    const SWAP_STATE_ACTIVE: u8 = 0;
+    const SWAP_STATE_COMPLETED: u8 = 1;
+    const SWAP_STATE_REFUNDED: u8 = 2;
+    const SWAP_STATE_EXPIRED: u8 = 3;
+
+    /// Core swap state information
+    struct SwapState has copy, drop, store {
+        state: u8,
+        hashlock: vector<u8>,
+        secret: Option<vector<u8>>,
+        timelock: u64,
+        sender: address,
+        receiver: address,
+        amount: u64,
+        created_at: u64,
+        completed_at: Option<u64>,
+        refunded_at: Option<u64>,
+    }
+
+    /// HTLC swap contract object - represents a single atomic swap
+    struct HTLCContract<phantom T> has key, store {
+        id: UID,
+        state: u8,
+        hashlock: vector<u8>,
+        secret: Option<vector<u8>>,
+        timelock: u64,
+        sender: address,
+        receiver: address,
+        balance: Balance<T>,
+        created_at: u64,
+        completed_at: Option<u64>,
+        refunded_at: Option<u64>,
+        protocol_fee: u64,
+    }
+
+    /// Swap registry - shared object that tracks all swaps
+    struct SwapEscrow has key {
+        id: UID,
+        admin: address,
+        protocol_version: u64,
+        is_paused: bool,
+        swap_count: u64,
+        total_volume: u64,
+        protocol_fees_collected: u64,
+        fee_rate: u64,
+        swaps: Table<ID, bool>, // ID -> exists
+    }
+
+    /// Admin capability for protocol management
+    struct AdminCap has key, store {
+        id: UID,
+    }
+
+    // ============ Events ============
+
+    /// Event emitted when a new swap is created
+    struct SwapCreatedEvent has copy, drop {
+        swap_id: ID,
+        hashlock: vector<u8>,
+        timelock: u64,
+        sender: address,
+        receiver: address,
+        amount: u64,
+        protocol_fee: u64,
+        created_at: u64,
+    }
+
+    /// Event emitted when a swap is completed
+    struct SwapCompletedEvent has copy, drop {
+        swap_id: ID,
+        secret: vector<u8>,
+        completed_by: address,
+        completed_at: u64,
+    }
+
+    /// Event emitted when a swap is refunded
+    struct SwapRefundedEvent has copy, drop {
+        swap_id: ID,
+        refunded_to: address,
+        refunded_at: u64,
+    }
+
+    /// Event emitted when protocol settings are updated
+    struct ProtocolUpdatedEvent has copy, drop {
+        action: vector<u8>,
+        old_value: u64,
+        new_value: u64,
+        updated_by: address,
+    }
+
+    // ============ Error functions ============
+    
+    public fun invalid_secret_hash(): u64 {
+        E_INVALID_HASHLOCK
+    }
+
+    // ============ Initialization ============
+
+    /// Initialize the atomic swap protocol
+    fun init(ctx: &mut TxContext) {
+        let admin_cap = AdminCap {
+            id: object::new(ctx),
+        };
+
+        let escrow = SwapEscrow {
+            id: object::new(ctx),
+            admin: tx_context::sender(ctx),
+            protocol_version: PROTOCOL_VERSION,
+            is_paused: false,
+            swap_count: 0,
+            total_volume: 0,
+            protocol_fees_collected: 0,
+            fee_rate: PROTOCOL_FEE_RATE,
+            swaps: table::new(ctx),
+        };
+
+        transfer::transfer(admin_cap, tx_context::sender(ctx));
+        transfer::share_object(escrow);
+    }
+
+    // ============ Core Functions ============
+
+    /// Create a new atomic swap with hash time lock
+    public fun create_swap<T>(
+        escrow: &mut SwapEscrow,
+        payment: Coin<T>,
+        hashlock: vector<u8>,
+        timelock: u64,
+        receiver: address,
+        clock: &Clock,
+        ctx: &mut TxContext
+    ): ID {
+        // Validate protocol state
+        assert!(!escrow.is_paused, E_PROTOCOL_PAUSED);
+        assert!(escrow.protocol_version == PROTOCOL_VERSION, E_INVALID_PROTOCOL_VERSION);
+        
+        // Validate inputs
+        assert!(vector::length(&hashlock) == SECRET_HASH_LENGTH, E_INVALID_HASHLOCK);
+        assert!(receiver != tx_context::sender(ctx), E_INVALID_PARTICIPANTS);
+        
+        let amount = coin::value(&payment);
+        assert!(amount >= MIN_SWAP_AMOUNT, E_INVALID_AMOUNT);
+        
+        let current_time = clock::timestamp_ms(clock);
+        assert!(timelock > current_time + MIN_TIMELOCK_DURATION, E_TIMELOCK_TOO_SHORT);
+        assert!(timelock <= current_time + MAX_TIMELOCK_DURATION, E_TIMELOCK_TOO_LONG);
+        
+        // Calculate protocol fee
+        let protocol_fee = (amount * escrow.fee_rate) / 10000;
+        let swap_amount = amount - protocol_fee;
+        
+        // Create the HTLC contract
+        let swap_id = object::new(ctx);
+        let id_copy = object::uid_to_inner(&swap_id);
+        
+        let swap = HTLCContract<T> {
+            id: swap_id,
+            state: SWAP_STATE_ACTIVE,
+            hashlock,
+            secret: option::none(),
+            timelock,
+            sender: tx_context::sender(ctx),
+            receiver,
+            balance: coin::into_balance(payment),
+            created_at: current_time,
+            completed_at: option::none(),
+            refunded_at: option::none(),
+            protocol_fee,
+        };
+
+        // Update escrow state
+        table::add(&mut escrow.swaps, id_copy, true);
+        escrow.swap_count = escrow.swap_count + 1;
+        escrow.total_volume = escrow.total_volume + amount;
+        escrow.protocol_fees_collected = escrow.protocol_fees_collected + protocol_fee;
+
+        // Emit event
+        event::emit(SwapCreatedEvent {
+            swap_id: id_copy,
+            hashlock,
+            timelock,
+            sender: tx_context::sender(ctx),
+            receiver,
+            amount: swap_amount,
+            protocol_fee,
+            created_at: current_time,
+        });
+
+        // Transfer swap to receiver (they will hold it until completion/refund)
+        transfer::public_transfer(swap, receiver);
+        
+        id_copy
+    }
+
+    /// Complete a swap by revealing the secret
+    public fun complete_swap<T>(
+        escrow: &mut SwapEscrow,
+        swap: HTLCContract<T>,
+        secret: vector<u8>,
+        clock: &Clock,
+        ctx: &mut TxContext
+    ): (Coin<T>, vector<u8>) {
+        assert!(!escrow.is_paused, E_PROTOCOL_PAUSED);
+        assert!(swap.state == SWAP_STATE_ACTIVE, E_SWAP_NOT_ACTIVE);
+        
+        let current_time = clock::timestamp_ms(clock);
+        assert!(current_time <= swap.timelock, E_TIMELOCK_EXPIRED);
+        
+        // Verify the secret matches the hashlock
+        let secret_hash = hash::sha2_256(secret);
+        assert!(secret_hash == swap.hashlock, E_INVALID_SECRET);
+        
+        // Only receiver can complete the swap
+        assert!(tx_context::sender(ctx) == swap.receiver, E_NOT_PARTICIPANT);
+        
+        let swap_id = object::uid_to_inner(&swap.id);
+        
+        // Extract the funds
+        let HTLCContract { 
+            id, 
+            state: _, 
+            hashlock: _, 
+            secret: _, 
+            timelock: _, 
+            sender: _, 
+            receiver: _, 
+            balance, 
+            created_at: _, 
+            completed_at: _, 
+            refunded_at: _, 
+            protocol_fee: _ 
+        } = swap;
+        
+        object::delete(id);
+        let payment = coin::from_balance(balance, ctx);
+
+        // Emit completion event
+        event::emit(SwapCompletedEvent {
+            swap_id,
+            secret,
+            completed_by: tx_context::sender(ctx),
+            completed_at: current_time,
+        });
+
+        (payment, secret)
+    }
+
+    /// Refund a swap after timelock expiration
+    public fun refund_swap<T>(
+        escrow: &mut SwapEscrow,
+        swap: HTLCContract<T>,
+        clock: &Clock,
+        ctx: &mut TxContext
+    ): Coin<T> {
+        assert!(!escrow.is_paused, E_PROTOCOL_PAUSED);
+        assert!(swap.state == SWAP_STATE_ACTIVE, E_SWAP_NOT_ACTIVE);
+        
+        let current_time = clock::timestamp_ms(clock);
+        assert!(current_time > swap.timelock, E_TIMELOCK_NOT_EXPIRED);
+        
+        // Only sender can refund the swap
+        assert!(tx_context::sender(ctx) == swap.sender, E_NOT_PARTICIPANT);
+        
+        let swap_id = object::uid_to_inner(&swap.id);
+        
+        // Extract the funds
+        let HTLCContract { 
+            id, 
+            state: _, 
+            hashlock: _, 
+            secret: _, 
+            timelock: _, 
+            sender: _, 
+            receiver: _, 
+            balance, 
+            created_at: _, 
+            completed_at: _, 
+            refunded_at: _, 
+            protocol_fee: _ 
+        } = swap;
+        
+        object::delete(id);
+        let payment = coin::from_balance(balance, ctx);
+
+        // Emit refund event
+        event::emit(SwapRefundedEvent {
+            swap_id,
+            refunded_to: tx_context::sender(ctx),
+            refunded_at: current_time,
+        });
+
+        payment
+    }
+
+    // ============ View Functions ============
+
+    /// Get swap state information
+    public fun get_swap_state<T>(swap: &HTLCContract<T>): SwapState {
+        SwapState {
+            state: swap.state,
+            hashlock: swap.hashlock,
+            secret: swap.secret,
+            timelock: swap.timelock,
+            sender: swap.sender,
+            receiver: swap.receiver,
+            amount: balance::value(&swap.balance),
+            created_at: swap.created_at,
+            completed_at: swap.completed_at,
+            refunded_at: swap.refunded_at,
+        }
+    }
+
+    /// Check if swap exists in escrow
+    public fun swap_exists(escrow: &SwapEscrow, swap_id: ID): bool {
+        table::contains(&escrow.swaps, swap_id)
+    }
+
+    /// Check if swap is still active
+    public fun is_swap_active<T>(swap: &HTLCContract<T>, clock: &Clock): bool {
+        let current_time = clock::timestamp_ms(clock);
+        swap.state == SWAP_STATE_ACTIVE && current_time <= swap.timelock
+    }
+
+    /// Check if swap can be refunded
+    public fun can_refund<T>(swap: &HTLCContract<T>, clock: &Clock): bool {
+        let current_time = clock::timestamp_ms(clock);
+        swap.state == SWAP_STATE_ACTIVE && current_time > swap.timelock
+    }
+
+    /// Get protocol statistics
+    public fun get_protocol_stats(escrow: &SwapEscrow): (u64, u64, u64, u64, bool) {
+        (
+            escrow.swap_count,
+            escrow.total_volume,
+            escrow.protocol_fees_collected,
+            escrow.fee_rate,
+            escrow.is_paused
+        )
+    }
+
+    // ============ Admin Functions ============
+
+    /// Pause the protocol (emergency only)
+    public fun pause_protocol(_: &AdminCap, escrow: &mut SwapEscrow, ctx: &mut TxContext) {
+        escrow.is_paused = true;
+        
+        event::emit(ProtocolUpdatedEvent {
+            action: b"PAUSE_PROTOCOL",
+            old_value: 0,
+            new_value: 1,
+            updated_by: tx_context::sender(ctx),
+        });
+    }
+
+    /// Unpause the protocol
+    public fun unpause_protocol(_: &AdminCap, escrow: &mut SwapEscrow, ctx: &mut TxContext) {
+        escrow.is_paused = false;
+        
+        event::emit(ProtocolUpdatedEvent {
+            action: b"UNPAUSE_PROTOCOL",
+            old_value: 1,
+            new_value: 0,
+            updated_by: tx_context::sender(ctx),
+        });
+    }
+
+    /// Update protocol fee rate
+    public fun update_fee_rate(
+        _: &AdminCap, 
+        escrow: &mut SwapEscrow, 
+        new_rate: u64, 
+        ctx: &mut TxContext
+    ) {
+        assert!(new_rate <= MAX_FEE_RATE, E_INVALID_FEE_RATE);
+        
+        let old_rate = escrow.fee_rate;
+        escrow.fee_rate = new_rate;
+        
+        event::emit(ProtocolUpdatedEvent {
+            action: b"UPDATE_FEE_RATE",
+            old_value: old_rate,
+            new_value: new_rate,
+            updated_by: tx_context::sender(ctx),
+        });
+    }
+
+    // ============ Test Functions ============
+
+    #[test_only]
+    use sui::test_scenario;
+    #[test_only]
+    use sui::coin::mint_for_testing;
+
+    #[test_only]
+    public fun init_for_testing(ctx: &mut TxContext) {
+        init(ctx);
+    }
+
+    #[test]
+    fun test_create_and_complete_swap() {
+        let scenario_val = test_scenario::begin(@0x1);
+        let scenario = &mut scenario_val;
+        
+        // Initialize protocol
+        test_scenario::next_tx(scenario, @0x1);
+        {
+            init_for_testing(test_scenario::ctx(scenario));
+        }
+
+        // Create swap
+        test_scenario::next_tx(scenario, @0x1);
+        {
+            let escrow = test_scenario::take_shared<SwapEscrow>(scenario);
+            let clock = clock::create_for_testing(test_scenario::ctx(scenario));
+            
+            let payment = mint_for_testing<SUI>(1000000, test_scenario::ctx(scenario));
+            let secret = b"test_secret_32_bytes_long_string";
+            let hashlock = hash::sha2_256(secret);
+            let timelock = clock::timestamp_ms(&clock) + 3600000; // 1 hour
+            
+            let _swap_id = create_swap(
+                &mut escrow,
+                payment,
+                hashlock,
+                timelock,
+                @0x2,
+                &clock,
+                test_scenario::ctx(scenario)
+            );
+            
+            test_scenario::return_shared(escrow);
+            clock::destroy_for_testing(clock);
+        }
+
+        // Complete swap
+        test_scenario::next_tx(scenario, @0x2);
+        {
+            let escrow = test_scenario::take_shared<SwapEscrow>(scenario);
+            let swap = test_scenario::take_from_sender<HTLCContract<SUI>>(scenario);
+            let clock = clock::create_for_testing(test_scenario::ctx(scenario));
+            
+            let secret = b"test_secret_32_bytes_long_string";
+            let (payment, revealed_secret) = complete_swap(
+                &mut escrow,
+                swap,
+                secret,
+                &clock,
+                test_scenario::ctx(scenario)
+            );
+            
+            assert!(revealed_secret == secret, 0);
+            assert!(coin::value(&payment) > 0, 1);
+            
+            test_scenario::return_shared(escrow);
+            coin::burn_for_testing(payment);
+            clock::destroy_for_testing(clock);
+        }
+
+        test_scenario::end(scenario_val);
+    }
+
+    #[test]
+    fun test_refund_expired_swap() {
+        let scenario_val = test_scenario::begin(@0x1);
+        let scenario = &mut scenario_val;
+        
+        // Initialize protocol
+        test_scenario::next_tx(scenario, @0x1);
+        {
+            init_for_testing(test_scenario::ctx(scenario));
+        }
+
+        // Create swap
+        test_scenario::next_tx(scenario, @0x1);
+        {
+            let escrow = test_scenario::take_shared<SwapEscrow>(scenario);
+            let clock = clock::create_for_testing(test_scenario::ctx(scenario));
+            
+            let payment = mint_for_testing<SUI>(1000000, test_scenario::ctx(scenario));
+            let secret = b"test_secret_32_bytes_long_string";
+            let hashlock = hash::sha2_256(secret);
+            let timelock = clock::timestamp_ms(&clock) + 3600000; // 1 hour
+            
+            create_swap(
+                &mut escrow,
+                payment,
+                hashlock,
+                timelock,
+                @0x2,
+                &clock,
+                test_scenario::ctx(scenario)
+            );
+            
+            test_scenario::return_shared(escrow);
+            clock::destroy_for_testing(clock);
+        }
+
+        // Fast-forward time and refund
+        test_scenario::next_tx(scenario, @0x1);
+        {
+            let escrow = test_scenario::take_shared<SwapEscrow>(scenario);
+            let clock = clock::create_for_testing(test_scenario::ctx(scenario));
+            clock::set_for_testing(&mut clock, 7200000); // 2 hours later
+            
+            // Receiver transfers swap back to sender for refund
+            test_scenario::next_tx(scenario, @0x2);
+            let swap = test_scenario::take_from_sender<HTLCContract<SUI>>(scenario);
+            transfer::public_transfer(swap, @0x1);
+            
+            test_scenario::next_tx(scenario, @0x1);
+            let swap = test_scenario::take_from_sender<HTLCContract<SUI>>(scenario);
+            
+            let payment = refund_swap(
+                &mut escrow,
+                swap,
+                &clock,
+                test_scenario::ctx(scenario)
+            );
+            
+            assert!(coin::value(&payment) > 0, 2);
+            
+            test_scenario::return_shared(escrow);
+            coin::burn_for_testing(payment);
+            clock::destroy_for_testing(clock);
+        }
+
+        test_scenario::end(scenario_val);
+    }
+} 

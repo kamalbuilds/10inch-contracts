@@ -1,0 +1,299 @@
+module fusion_swap::fusion_relayer {
+    use std::vector;
+    use std::option::{Self, Option};
+    use sui::object::{Self, UID, ID};
+    use sui::tx_context::{Self, TxContext};
+    use sui::transfer;
+    use sui::coin::{Self, Coin};
+    use sui::clock::{Self, Clock};
+    use sui::event;
+    use sui::balance::{Self, Balance};
+    use sui::table::{Self, Table};
+    use sui::dynamic_object_field as dof;
+    use fusion_swap::fusion_htlc::{Self, HTLC};
+
+    // Error codes
+    const E_NOT_RELAYER: u64 = 100;
+    const E_NOT_OWNER: u64 = 101;
+    const E_ORDER_NOT_FOUND: u64 = 102;
+    const E_ALREADY_COMPLETED: u64 = 103;
+    const E_INSUFFICIENT_DEPOSIT: u64 = 104;
+    const E_INVALID_CHAIN: u64 = 105;
+    const E_NOT_AUTHORIZED: u64 = 106;
+
+    // Cross-chain order
+    struct CrossChainOrder has store, drop {
+        order_id: u64,
+        initiator: address,
+        src_chain: u8,
+        dst_chain: u8,
+        src_amount: u64,
+        dst_amount: u64,
+        dst_recipient: vector<u8>,
+        secret_hash: vector<u8>,
+        safety_deposit: u64,
+        relayer: Option<address>,
+        src_htlc_id: Option<ID>,
+        dst_tx_hash: Option<vector<u8>>,
+        created_at: u64,
+        completed: bool,
+        cancelled: bool,
+    }
+
+    // Order wrapper for storage
+    struct OrderWrapper<phantom T> has key, store {
+        id: UID,
+        order: CrossChainOrder,
+        deposit_balance: Balance<T>,
+    }
+
+    // Relayer hub - shared object
+    struct RelayerHub has key {
+        id: UID,
+        orders: Table<u64, ID>, // order_id -> OrderWrapper object ID
+        next_order_id: u64,
+        relayers: vector<address>,
+        owner: address,
+        total_orders: u64,
+        total_volume: u64,
+    }
+
+    // Events
+    struct OrderCreated has copy, drop {
+        order_id: u64,
+        initiator: address,
+        dst_chain: u8,
+        src_amount: u64,
+        dst_amount: u64,
+        secret_hash: vector<u8>,
+    }
+
+    struct OrderCompleted has copy, drop {
+        order_id: u64,
+        relayer: address,
+        secret: vector<u8>,
+        dst_tx_hash: vector<u8>,
+    }
+
+    struct OrderCancelled has copy, drop {
+        order_id: u64,
+        initiator: address,
+    }
+
+    // Initialize relayer hub
+    fun init(ctx: &mut TxContext) {
+        let sender = tx_context::sender(ctx);
+        transfer::share_object(RelayerHub {
+            id: object::new(ctx),
+            orders: table::new(ctx),
+            next_order_id: 1,
+            relayers: vector::empty(),
+            owner: sender,
+            total_orders: 0,
+            total_volume: 0,
+        });
+    }
+
+    // Add a relayer
+    public entry fun add_relayer(
+        hub: &mut RelayerHub,
+        relayer: address,
+        ctx: &mut TxContext
+    ) {
+        assert!(tx_context::sender(ctx) == hub.owner, E_NOT_OWNER);
+        if (!vector::contains(&hub.relayers, &relayer)) {
+            vector::push_back(&mut hub.relayers, relayer);
+        }
+    }
+
+    // Deploy source HTLC and create order
+    public entry fun deploy_source<T>(
+        hub: &mut RelayerHub,
+        payment: Coin<T>,
+        safety_deposit: Coin<T>,
+        dst_chain: u8,
+        dst_recipient: vector<u8>,
+        dst_amount: u64,
+        secret_hash: vector<u8>,
+        timelock: u64,
+        clock: &Clock,
+        ctx: &mut TxContext
+    ) {
+        let sender = tx_context::sender(ctx);
+        let src_amount = coin::value(&payment);
+        let deposit_amount = coin::value(&safety_deposit);
+        
+        assert!(deposit_amount > 0, E_INSUFFICIENT_DEPOSIT);
+
+        // Create HTLC first
+        let htlc_recipient = object::id_address(&hub.id); // Hub receives HTLC
+        fusion_htlc::create_htlc(
+            payment,
+            htlc_recipient,
+            secret_hash,
+            timelock,
+            clock,
+            hub, // Assuming registry is hub for simplicity
+            ctx
+        );
+
+        // Create order
+        let order_id = hub.next_order_id;
+        hub.next_order_id = hub.next_order_id + 1;
+
+        let order = CrossChainOrder {
+            order_id,
+            initiator: sender,
+            src_chain: 1, // Sui chain ID
+            dst_chain,
+            src_amount,
+            dst_amount,
+            dst_recipient,
+            secret_hash,
+            safety_deposit: deposit_amount,
+            relayer: option::none(),
+            src_htlc_id: option::none(), // Will be set when HTLC is received
+            dst_tx_hash: option::none(),
+            created_at: clock::timestamp_ms(clock),
+            completed: false,
+            cancelled: false,
+        };
+
+        // Create order wrapper
+        let order_wrapper = OrderWrapper<T> {
+            id: object::new(ctx),
+            order,
+            deposit_balance: coin::into_balance(safety_deposit),
+        };
+
+        let wrapper_id = object::id(&order_wrapper);
+        
+        // Store order reference
+        table::add(&mut hub.orders, order_id, wrapper_id);
+        
+        // Update stats
+        hub.total_orders = hub.total_orders + 1;
+        hub.total_volume = hub.total_volume + src_amount;
+
+        // Emit event
+        event::emit(OrderCreated {
+            order_id,
+            initiator: sender,
+            dst_chain,
+            src_amount,
+            dst_amount,
+            secret_hash,
+        });
+
+        // Store order wrapper as dynamic field
+        dof::add(&mut hub.id, order_id, order_wrapper);
+    }
+
+    // Relayer completes order
+    public entry fun complete_order<T>(
+        hub: &mut RelayerHub,
+        htlc: &mut HTLC<T>,
+        order_id: u64,
+        secret: vector<u8>,
+        dst_tx_hash: vector<u8>,
+        clock: &Clock,
+        ctx: &mut TxContext
+    ) {
+        let relayer = tx_context::sender(ctx);
+        assert!(vector::contains(&hub.relayers, &relayer), E_NOT_RELAYER);
+
+        // Get order
+        assert!(table::contains(&hub.orders, order_id), E_ORDER_NOT_FOUND);
+        
+        // Get and update order
+        let order_wrapper = dof::borrow_mut<u64, OrderWrapper<T>>(&mut hub.id, order_id);
+        assert!(!order_wrapper.order.completed && !order_wrapper.order.cancelled, E_ALREADY_COMPLETED);
+
+        // Update order
+        order_wrapper.order.relayer = option::some(relayer);
+        order_wrapper.order.dst_tx_hash = option::some(dst_tx_hash);
+        order_wrapper.order.src_htlc_id = option::some(object::id(htlc));
+        order_wrapper.order.completed = true;
+
+        // Complete HTLC to claim funds
+        fusion_htlc::complete_htlc(htlc, secret, clock, ctx);
+
+        // Return safety deposit to initiator
+        let deposit = balance::value(&order_wrapper.deposit_balance);
+        let deposit_coin = coin::take(&mut order_wrapper.deposit_balance, deposit, ctx);
+        transfer::public_transfer(deposit_coin, order_wrapper.order.initiator);
+
+        // Emit event
+        event::emit(OrderCompleted {
+            order_id,
+            relayer,
+            secret,
+            dst_tx_hash,
+        });
+    }
+
+    // Cancel expired order
+    public entry fun cancel_order<T>(
+        hub: &mut RelayerHub,
+        htlc: &mut HTLC<T>,
+        order_id: u64,
+        clock: &Clock,
+        ctx: &mut TxContext
+    ) {
+        let sender = tx_context::sender(ctx);
+        
+        // Get order
+        assert!(table::contains(&hub.orders, order_id), E_ORDER_NOT_FOUND);
+        let order_wrapper = dof::borrow_mut<u64, OrderWrapper<T>>(&mut hub.id, order_id);
+        
+        assert!(order_wrapper.order.initiator == sender, E_NOT_AUTHORIZED);
+        assert!(!order_wrapper.order.completed && !order_wrapper.order.cancelled, E_ALREADY_COMPLETED);
+
+        // Refund HTLC
+        fusion_htlc::refund_htlc(htlc, clock, ctx);
+
+        // Return safety deposit
+        let deposit = balance::value(&order_wrapper.deposit_balance);
+        let deposit_coin = coin::take(&mut order_wrapper.deposit_balance, deposit, ctx);
+        transfer::public_transfer(deposit_coin, sender);
+
+        // Update order
+        order_wrapper.order.cancelled = true;
+
+        // Emit event
+        event::emit(OrderCancelled {
+            order_id,
+            initiator: sender,
+        });
+    }
+
+    // View functions
+    public fun get_order_info(
+        hub: &RelayerHub,
+        order_id: u64
+    ): (u64, address, u8, u8, u64, u64, bool, bool) {
+        assert!(table::contains(&hub.orders, order_id), E_ORDER_NOT_FOUND);
+        let order_wrapper = dof::borrow<u64, OrderWrapper<Coin<sui::sui::SUI>>>(&hub.id, order_id);
+        let order = &order_wrapper.order;
+        
+        (
+            order.order_id,
+            order.initiator,
+            order.src_chain,
+            order.dst_chain,
+            order.src_amount,
+            order.dst_amount,
+            order.completed,
+            order.cancelled
+        )
+    }
+
+    public fun is_relayer(hub: &RelayerHub, addr: address): bool {
+        vector::contains(&hub.relayers, &addr)
+    }
+
+    #[test_only]
+    public fun init_for_testing(ctx: &mut TxContext) {
+        init(ctx);
+    }
+}

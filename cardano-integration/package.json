@@ -22,8 +22,10 @@
   "dependencies": {
     "@lucid-evolution/lucid": "^0.4.29",
     "@lucid-evolution/provider": "^0.1.90",
+    "bip39": "^3.1.0",
     "dotenv": "^17.2.1",
-    "ethers": "^6.15.0"
+    "ethers": "^6.15.0",
+    "lucid-cardano": "^0.10.11"
   },
   "devDependencies": {
     "@types/jest": "^30.0.0",

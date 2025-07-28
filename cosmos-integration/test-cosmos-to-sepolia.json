@@ -1,0 +1,18 @@
+{
+  "cosmos": {
+    "orderId": "4",
+    "secret": "mysecret1754126913506",
+    "secretHash": "6b55c06a45adcb52aee5765174a9b999b5bab2d54ad2d79d78dc5b0e4a75c57d",
+    "initiator": "neutron1njzwck6re79wy3z0ydrt32f57ddhuk0mngpk0r",
+    "amount": "1000000",
+    "safetyDeposit": "500000",
+    "txHash": "1954BC1E6A27ED4EDD4024C5E6B55AD9BD69935B0341F28F8D65C4F05DE98BCE"
+  },
+  "sepolia": {
+    "chainId": 11155111,
+    "recipient": "0x742d35Cc6634C0532925a3b844Bc9e7595f6D1aB",
+    "amount": "1000000000000000",
+    "token": "0x0000000000000000000000000000000000000000"
+  },
+  "timestamp": "2025-08-02T09:28:39.401Z"
+}

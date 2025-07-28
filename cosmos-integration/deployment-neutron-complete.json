@@ -1,0 +1,22 @@
+{
+  "network": "neutron-testnet",
+  "chainId": "pion-1",
+  "rpc": "https://rpc-falcron.pion-1.ntrn.tech",
+  "deployer": "neutron1njzwck6re79wy3z0ydrt32f57ddhuk0mngpk0r",
+  "contracts": {
+    "atomicSwap": {
+      "codeId": 12310,
+      "address": "neutron1tnetwd64jle2xncgkcpuf38sp9xhud7sku6tezjvvwdhvsfv6j3qeqkd53"
+    },
+    "crossChainBridge": {
+      "codeId": 12311,
+      "address": "neutron1fw9wc9uyf0maluja7ftu25amx9w3yx6lqknvec5gejvz0974nrfq3zqcwz"
+    },
+    "resolver": {
+      "codeId": 12313,
+      "address": "neutron1haev26g5d2es97kr8lup59aykf9raeu59w8nhtzr2t4fju0702qstcr42v",
+      "txHash": "363A0C0A8D12F8F1294A3440704DD5445BD4F86179782B83BA0A076576C3C981"
+    }
+  },
+  "timestamp": "2025-07-26T05:44:19.355Z"
+}

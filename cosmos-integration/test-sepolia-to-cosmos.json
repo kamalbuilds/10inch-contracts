@@ -1,0 +1,16 @@
+{
+  "sepolia": {
+    "orderId": "3",
+    "secret": "sepolia_secret_1754126598953",
+    "secretHash": "0xefa2e7d3e07092f8d48c0f68a08c124d49402a4feb0d4810c2f73e861cc291ab",
+    "initiator": "0x666446eC2343e9E7e3D75C4C5b6A15355Ec7d7D4",
+    "amount": "1000000000000000",
+    "txHash": "0xb4d2e86e0ff54c9b357b6fba3ce3f7ebe3a109c483132e08957b4f603af4358d",
+    "resolver": "0xA2fbe4f2Fce35620c40f21f1B1B507a44682706a"
+  },
+  "cosmos": {
+    "recipient": "neutron1njzwck6re79wy3z0ydrt32f57ddhuk0mngpk0r",
+    "chainId": 1
+  },
+  "timestamp": "2025-08-02T09:23:40.758Z"
+}

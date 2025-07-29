@@ -1,0 +1,10 @@
+{
+  "name": "tron-integration",
+  "version": "1.0.0",
+  "description": "1inch Fusion+ Tron Integration",
+  "dependencies": {
+    "dotenv": "^16.0.3",
+    "ethers": "^6.15.0",
+    "tronweb": "^5.3.2"
+  }
+}

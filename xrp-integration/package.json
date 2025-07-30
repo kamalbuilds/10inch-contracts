@@ -1,0 +1,29 @@
+{
+  "name": "xrp-integration",
+  "version": "1.0.0",
+  "main": "index.js",
+  "scripts": {
+    "build": "tsc",
+    "deploy:testnet": "ts-node scripts/deploy-testnet.ts",
+    "test:crosschain": "ts-node scripts/test-cross-chain.ts",
+    "test:xrp-to-eth": "ts-node scripts/test-xrp-to-eth.ts",
+    "test:eth-to-xrp": "ts-node scripts/test-eth-to-xrp.ts",
+    "start:relayer": "ts-node src/start-relayer.ts",
+    "serve:ui": "npx http-server ui -p 3000",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "dependencies": {
+    "@types/node": "^24.1.0",
+    "@types/node-fetch": "^2.6.13",
+    "dotenv": "^17.2.1",
+    "ethers": "^6.15.0",
+    "node-fetch": "^3.3.2",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.9.2",
+    "xrpl": "^4.4.0"
+  }
+}

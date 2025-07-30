@@ -1,0 +1,7 @@
+{
+  "network": "testnet",
+  "walletAddress": "rKaLGw1QBjHjdosQekLyLqZZL2oKRSH2by",
+  "rpcUrl": "wss://testnet.xrpl-labs.com",
+  "testEscrowSequence": 9405044,
+  "deployedAt": "2025-08-02T05:36:08.023Z"
+}

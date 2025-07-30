@@ -1,0 +1,345 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>1inch Fusion+ XRP Integration</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #0a0a0a;
+            color: #ffffff;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        
+        .container {
+            max-width: 500px;
+            width: 100%;
+            padding: 20px;
+        }
+        
+        .card {
+            background: #1a1a1a;
+            border: 1px solid #2a2a2a;
+            border-radius: 16px;
+            padding: 32px;
+        }
+        
+        .header {
+            text-align: center;
+            margin-bottom: 32px;
+        }
+        
+        .logo {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 12px;
+            margin-bottom: 16px;
+        }
+        
+        .logo img {
+            width: 40px;
+            height: 40px;
+        }
+        
+        h1 {
+            font-size: 24px;
+            font-weight: 600;
+        }
+        
+        .subtitle {
+            color: #888;
+            font-size: 14px;
+        }
+        
+        .form-group {
+            margin-bottom: 20px;
+        }
+        
+        label {
+            display: block;
+            margin-bottom: 8px;
+            font-size: 14px;
+            color: #ccc;
+        }
+        
+        input, select {
+            width: 100%;
+            padding: 12px 16px;
+            background: #0a0a0a;
+            border: 1px solid #2a2a2a;
+            border-radius: 8px;
+            color: #fff;
+            font-size: 16px;
+            transition: border-color 0.2s;
+        }
+        
+        input:focus, select:focus {
+            outline: none;
+            border-color: #0066ff;
+        }
+        
+        .chain-select {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 16px;
+            margin-bottom: 20px;
+        }
+        
+        .chain-box {
+            text-align: center;
+        }
+        
+        .chain-box label {
+            font-size: 12px;
+            margin-bottom: 4px;
+        }
+        
+        .swap-arrow {
+            text-align: center;
+            font-size: 24px;
+            margin: 20px 0;
+            color: #666;
+        }
+        
+        .button {
+            width: 100%;
+            padding: 16px;
+            background: #0066ff;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background-color 0.2s;
+        }
+        
+        .button:hover {
+            background: #0052cc;
+        }
+        
+        .button:disabled {
+            background: #333;
+            cursor: not-allowed;
+        }
+        
+        .status {
+            margin-top: 20px;
+            padding: 16px;
+            background: #0a0a0a;
+            border: 1px solid #2a2a2a;
+            border-radius: 8px;
+            font-size: 14px;
+            line-height: 1.5;
+        }
+        
+        .status.success {
+            border-color: #00cc66;
+            color: #00cc66;
+        }
+        
+        .status.error {
+            border-color: #ff3366;
+            color: #ff3366;
+        }
+        
+        .info-box {
+            margin-top: 20px;
+            padding: 16px;
+            background: #1a1a1a;
+            border: 1px solid #2a2a2a;
+            border-radius: 8px;
+            font-size: 12px;
+            color: #888;
+        }
+        
+        .wallet-info {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+            padding: 12px;
+            background: #0a0a0a;
+            border: 1px solid #2a2a2a;
+            border-radius: 8px;
+            font-size: 14px;
+        }
+        
+        .balance {
+            color: #0066ff;
+            font-weight: 600;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="card">
+            <div class="header">
+                <div class="logo">
+                    <span style="font-size: 32px;">🦄</span>
+                    <span style="font-size: 24px;">↔️</span>
+                    <span style="font-size: 32px;">💧</span>
+                </div>
+                <h1>1inch Fusion+ XRP</h1>
+                <p class="subtitle">Cross-chain atomic swaps between XRP and Ethereum</p>
+            </div>
+            
+            <div class="wallet-info" id="walletInfo" style="display: none;">
+                <span>Wallet: <span id="walletAddress">Not connected</span></span>
+                <span class="balance">Balance: <span id="balance">0</span></span>
+            </div>
+            
+            <form id="swapForm">
+                <div class="chain-select">
+                    <div class="chain-box">
+                        <label>From</label>
+                        <select id="fromChain">
+                            <option value="XRP">XRP Ledger</option>
+                            <option value="ETH">Ethereum</option>
+                            <option value="SEPOLIA">Sepolia</option>
+                        </select>
+                    </div>
+                    <div class="chain-box">
+                        <label>To</label>
+                        <select id="toChain">
+                            <option value="ETH">Ethereum</option>
+                            <option value="SEPOLIA">Sepolia</option>
+                            <option value="XRP">XRP Ledger</option>
+                        </select>
+                    </div>
+                </div>
+                
+                <div class="form-group">
+                    <label for="amount">Amount</label>
+                    <input type="number" id="amount" placeholder="0.0" step="0.1" required>
+                </div>
+                
+                <div class="form-group">
+                    <label for="receiver">Receiver Address</label>
+                    <input type="text" id="receiver" placeholder="Enter receiver address" required>
+                </div>
+                
+                <div class="swap-arrow">⬇️</div>
+                
+                <button type="submit" class="button" id="swapButton">
+                    Connect Wallet
+                </button>
+            </form>
+            
+            <div id="status" class="status" style="display: none;"></div>
+            
+            <div class="info-box">
+                <strong>How it works:</strong><br>
+                • Hash Time-Locked Contracts (HTLCs) on both chains<br>
+                • Atomic swaps with guaranteed execution or refund<br>
+                • No intermediary custody of funds<br>
+                • Testnet demo - get XRP from faucet
+            </div>
+        </div>
+    </div>
+    
+    <script type="module">
+        // This is a simplified demo UI
+        // In production, you would use proper wallet integration
+        
+        let connected = false;
+        let xrpAddress = '';
+        let evmAddress = '';
+        
+        const button = document.getElementById('swapButton');
+        const form = document.getElementById('swapForm');
+        const status = document.getElementById('status');
+        const walletInfo = document.getElementById('walletInfo');
+        
+        // Handle form submission
+        form.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            if (!connected) {
+                await connectWallet();
+            } else {
+                await performSwap();
+            }
+        });
+        
+        async function connectWallet() {
+            setStatus('Connecting wallets...', 'info');
+            
+            // Simulate wallet connection
+            // In production, use actual wallet libraries
+            setTimeout(() => {
+                connected = true;
+                xrpAddress = 'rN7n7otQDd6FczFgLdSqtcsAUxDkw6fzRH';
+                evmAddress = '0x' + '1234567890'.repeat(4);
+                
+                document.getElementById('walletAddress').textContent = 
+                    xrpAddress.substring(0, 6) + '...' + xrpAddress.slice(-4);
+                document.getElementById('balance').textContent = '100 XRP';
+                
+                walletInfo.style.display = 'flex';
+                button.textContent = 'Initiate Swap';
+                
+                setStatus('Wallets connected successfully!', 'success');
+            }, 1500);
+        }
+        
+        async function performSwap() {
+            const fromChain = document.getElementById('fromChain').value;
+            const toChain = document.getElementById('toChain').value;
+            const amount = document.getElementById('amount').value;
+            const receiver = document.getElementById('receiver').value;
+            
+            if (!amount || !receiver) {
+                setStatus('Please fill in all fields', 'error');
+                return;
+            }
+            
+            setStatus(`Initiating ${fromChain} → ${toChain} swap...`, 'info');
+            button.disabled = true;
+            
+            // Simulate swap process
+            const steps = [
+                `Creating HTLC on ${fromChain}...`,
+                'Waiting for confirmation...',
+                `Creating corresponding HTLC on ${toChain}...`,
+                'Revealing secret...',
+                'Swap completed successfully! 🎉'
+            ];
+            
+            for (let i = 0; i < steps.length; i++) {
+                await new Promise(resolve => setTimeout(resolve, 2000));
+                setStatus(steps[i], i === steps.length - 1 ? 'success' : 'info');
+            }
+            
+            button.disabled = false;
+        }
+        
+        function setStatus(message, type) {
+            status.textContent = message;
+            status.className = 'status ' + type;
+            status.style.display = 'block';
+        }
+        
+        // Handle chain selection
+        document.getElementById('fromChain').addEventListener('change', (e) => {
+            const toChain = document.getElementById('toChain');
+            if (e.target.value === 'XRP') {
+                toChain.value = 'SEPOLIA';
+            } else {
+                toChain.value = 'XRP';
+            }
+        });
+    </script>
+</body>
+</html>

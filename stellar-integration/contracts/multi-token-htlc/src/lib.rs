@@ -1,9 +1,8 @@
 #![no_std]
 
 use soroban_sdk::{
-    contract, contractimpl, contracttype, log, symbol_short, vec, Address, BytesN, Env, Symbol, Vec
+    contract, contractimpl, contracttype, log, symbol_short, token, Address, BytesN, Env, Symbol, Vec
 };
-use soroban_token_sdk::TokenClient;
 
 #[contracttype]
 #[derive(Clone, Debug)]
@@ -72,7 +71,7 @@ impl MultiTokenHTLC {
 
         let config = TokenConfig {
             address: token.clone(),
-            symbol,
+            symbol: symbol.clone(),
             decimals,
             enabled: true,
             min_amount,
@@ -91,7 +90,7 @@ impl MultiTokenHTLC {
             env.storage().persistent().set(&DataKey::SupportedTokens, &tokens);
         }
 
-        log!(&env, "Token added: {:?}", symbol);
+        log!(&env, "Token added: {:?}", config.symbol);
     }
 
     /// Update token configuration
@@ -147,7 +146,7 @@ impl MultiTokenHTLC {
         assert!(timelock > env.ledger().timestamp(), "Timelock must be in the future");
         
         // Transfer tokens to contract
-        let token_client = TokenClient::new(&env, &token);
+        let token_client = token::Client::new(&env, &token);
         token_client.transfer(&sender, &env.current_contract_address(), &amount);
         
         // Get and increment counter
@@ -205,7 +204,7 @@ impl MultiTokenHTLC {
         htlc.receiver.require_auth();
         
         // Transfer tokens
-        let token_client = TokenClient::new(&env, &htlc.token);
+        let token_client = token::Client::new(&env, &htlc.token);
         token_client.transfer(
             &env.current_contract_address(),
             &htlc.receiver,
@@ -242,7 +241,7 @@ impl MultiTokenHTLC {
         htlc.sender.require_auth();
         
         // Transfer tokens back
-        let token_client = TokenClient::new(&env, &htlc.token);
+        let token_client = token::Client::new(&env, &htlc.token);
         token_client.transfer(
             &env.current_contract_address(),
             &htlc.sender,

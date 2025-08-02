@@ -1,9 +1,8 @@
 #![no_std]
 
 use soroban_sdk::{
-    contract, contractimpl, contracttype, log, symbol_short, vec, Address, BytesN, Env, Map, Symbol, Vec
+    contract, contractimpl, contracttype, log, symbol_short, token, Address, BytesN, Env, Vec
 };
-use soroban_token_sdk::TokenClient;
 
 #[contracttype]
 #[derive(Clone, Debug)]
@@ -80,7 +79,7 @@ impl PartialFillHTLC {
         assert!(timelock > env.ledger().timestamp(), "Timelock must be in the future");
         
         // Transfer tokens to contract
-        let token_client = TokenClient::new(&env, &token);
+        let token_client = token::Client::new(&env, &token);
         token_client.transfer(&sender, &env.current_contract_address(), &total_amount);
         
         // Get and increment counter
@@ -156,7 +155,7 @@ impl PartialFillHTLC {
         assert!(current_deposit >= required_deposit, "Insufficient deposit");
         
         // Transfer tokens to filler (they will handle the cross-chain part)
-        let token_client = TokenClient::new(&env, &htlc.token);
+        let token_client = token::Client::new(&env, &htlc.token);
         token_client.transfer(
             &env.current_contract_address(),
             &filler,
@@ -184,7 +183,7 @@ impl PartialFillHTLC {
         
         // Emit event
         env.events().publish(
-            (symbol_short!("phtlc_fill"), htlc_id),
+            (symbol_short!("fill"), htlc_id),
             (filler, amount, htlc.filled_amount, htlc.total_amount)
         );
     }
@@ -217,7 +216,7 @@ impl PartialFillHTLC {
         
         // Emit event
         env.events().publish(
-            (symbol_short!("phtlc_wdrw"), htlc_id),
+            (symbol_short!("withdraw"), htlc_id),
             (htlc.receiver, htlc.filled_amount, secret)
         );
     }
@@ -241,7 +240,7 @@ impl PartialFillHTLC {
         
         if refund_amount > 0 {
             // Transfer unfilled amount back
-            let token_client = TokenClient::new(&env, &htlc.token);
+            let token_client = token::Client::new(&env, &htlc.token);
             token_client.transfer(
                 &env.current_contract_address(),
                 &htlc.sender,
@@ -267,7 +266,7 @@ impl PartialFillHTLC {
         resolver.require_auth();
         
         // Transfer tokens to contract
-        let token_client = TokenClient::new(&env, &token);
+        let token_client = token::Client::new(&env, &token);
         token_client.transfer(&resolver, &env.current_contract_address(), &amount);
         
         // Update deposit balance
@@ -294,7 +293,7 @@ impl PartialFillHTLC {
         assert!(current >= amount, "Insufficient deposit");
         
         // Transfer tokens back
-        let token_client = TokenClient::new(&env, &token);
+        let token_client = token::Client::new(&env, &token);
         token_client.transfer(&env.current_contract_address(), &resolver, &amount);
         
         // Update balance

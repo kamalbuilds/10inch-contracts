@@ -9,11 +9,10 @@ Fusion+ Cross-Chain Atomic Swaps
 
 This project implements cross-chain atomic swaps using 1inch Fusion+ technology. It enables secure, trustless token swaps across multiple blockchains through Hash Time-Locked Contracts (HTLCs) enhanced with 1inch's Dutch auction mechanism and MEV protection.
 
-## 🎯 Bounties
+## 🎯 10 Chains Integrated
 
-### Priority Track ($224,000)
+
 - Aptos - Move-based smart contracts with atomic swap capabilities
-
 
 - Cosmos - IBC-compatible cross-chain swaps
 
@@ -23,9 +22,16 @@ This project implements cross-chain atomic swaps using 1inch Fusion+ technology.
 
 - Tron - TVM smart contracts for cross-chain compatibility
 
-Demo video -> https://youtu.be/NjJUlk_KOwI
+[![Fusion + Demo of cross-chain atomic swap process](https://img.youtube.com/vi/NjJUlk_KOwI/maxresdefault.jpg)](https://www.youtube.com/watch?v=NjJUlk_KOwI)
+
 
 - Stellar - Soroban smart contracts for atomic swaps
+
+- Ton Blockchain 
+
+
+[![Fusion + Demo of cross-chain atomic swap process](https://img.youtube.com/vi/tJ-7YyRVFOA/maxresdefault.jpg)](https://www.youtube.com/watch?tJ-7YyRVFOA)
+
 
 ### Integration Track ($180,000)
 - Ton, Monad, Starknet, Cardano

@@ -2,8 +2,6 @@
 Fusion+ Cross-Chain Atomic Swaps
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Build Status](https://img.shields.io/github/actions/workflow/status/1inch/fusion-plus-cross-chain/ci.yml?branch=main)](https://github.com/1inch/fusion-plus-cross-chain/actions)
-[![Coverage](https://img.shields.io/codecov/c/github/1inch/fusion-plus-cross-chain)](https://codecov.io/gh/1inch/fusion-plus-cross-chain)
 
 ## 🚀 Project Overview
 
@@ -11,14 +9,18 @@ This project implements cross-chain atomic swaps using 1inch Fusion+ technology.
 
 ## 🎯 10 Chains Integrated
 
-
 - Aptos - Move-based smart contracts with atomic swap capabilities
+
+- Sui - Move-based smart contracts with advanced features
 
 - Cosmos - IBC-compatible cross-chain swaps
 
+[![Fusion+ Cosmos Demo of cross-chain atomic swap process](https://img.youtube.com/vi/YIMWN0-JKGA/maxresdefault.jpg)](https://www.youtube.com/watch?v=YIMWN0-JKGA)
+
 - Near Protocol - Rust smart contracts for secure atomic swaps
 
-- Sui - Move-based smart contracts with advanced features
+[![Fusion+ Cosmos Demo of cross-chain atomic swap process](https://img.youtube.com/vi/Qs1G8EutzMQ/maxresdefault.jpg)](https://www.youtube.com/watch?v=Qs1G8EutzMQ)
+
 
 - Tron - TVM smart contracts for cross-chain compatibility
 
@@ -27,15 +29,17 @@ This project implements cross-chain atomic swaps using 1inch Fusion+ technology.
 
 - Stellar - Soroban smart contracts for atomic swaps
 
-- Ton Blockchain 
 
+- Ton Blockchain 
 
 [![Fusion + Demo of cross-chain atomic swap process](https://img.youtube.com/vi/tJ-7YyRVFOA/maxresdefault.jpg)](https://www.youtube.com/watch?tJ-7YyRVFOA)
 
+- Cardano Blockchain
 
-### Integration Track ($180,000)
-- Ton, Monad, Starknet, Cardano
-- XRP Ledger, ICP, Tezos, Polkadot, EOS
+
+- XRP Blockchain
+
+
 
 ## 🏗️ Architecture
 

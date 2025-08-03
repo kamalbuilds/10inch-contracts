@@ -79,6 +79,7 @@ async function deployTestnet() {
             
             // Test claiming
             console.log('\n🔓 Testing HTLC claim...');
+            
             const claimResult = await xrpClient.claimHTLC(
                 address,
                 result.escrowSequence!,

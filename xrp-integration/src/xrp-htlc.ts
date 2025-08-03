@@ -82,10 +82,16 @@ export class XRPHTLC {
 
     // Generate fulfillment from secret
     generateFulfillment(secret: Buffer): string {
-        // Format: A022{length-byte}20{secret}
+        // XRP uses a specific format for PREIMAGE-SHA-256 fulfillments
+        // Format: A0 <total-length> 80 <preimage-length> <preimage>
         const secretHex = secret.toString('hex').toUpperCase();
-        const lengthHex = (secret.length).toString(16).padStart(2, '0').toUpperCase();
-        return 'A0' + lengthHex + '80' + (secret.length).toString(16).padStart(2, '0') + secretHex;
+        const preimageLength = secret.length;
+        const totalLength = preimageLength + 2; // 2 bytes for type (80) and length
+        
+        const totalLengthHex = totalLength.toString(16).padStart(2, '0').toUpperCase();
+        const preimageLengthHex = preimageLength.toString(16).padStart(2, '0').toUpperCase();
+        
+        return 'A0' + totalLengthHex + '80' + preimageLengthHex + secretHex;
     }
 
     // Create an HTLC using XRP Ledger's escrow feature

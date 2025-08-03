@@ -39,7 +39,7 @@ WASM Size: 19,881 bytes (optimized)
 
 - Ton Blockchain 
 
-[![Fusion + Demo of cross-chain atomic swap process](https://img.youtube.com/vi/tJ-7YyRVFOA/maxresdefault.jpg)](https://www.youtube.com/watch?tJ-7YyRVFOA)
+[![Fusion + Demo of cross-chain atomic swap process](https://img.youtube.com/vi/tJ-7YyRVFOA/maxresdefault.jpg)](https://www.youtube.com/watch?v=tJ-7YyRVFOA)
 
 - Cardano Blockchain
 

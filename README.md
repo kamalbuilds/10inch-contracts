@@ -29,6 +29,12 @@ This project implements cross-chain atomic swaps using 1inch Fusion+ technology.
 
 - Stellar - Soroban smart contracts for atomic swaps
 
+Address: CATGJPI3BE2LJHDHYXKNUAELSLHN4BYVPZTIQ7T2RGDWA5L67DUAWW5D
+Network: Stellar Testnet
+Status: OPERATIONAL
+WASM Size: 19,881 bytes (optimized)
+
+
 
 - Ton Blockchain 
 
